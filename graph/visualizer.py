@@ -154,7 +154,8 @@ class GraphVisualizer:
                 font={"size": 9, "color": "#cccccc"},
             )
 
-        return net.generate_html(notebook=False)
+        html = net.generate_html(notebook=False)
+        return self._patch_html(html)
 
     # ------------------------------------------------------------------
     # Subgraph (ego network)
@@ -252,4 +253,24 @@ class GraphVisualizer:
                 arrows="to",
             )
 
-        return net.generate_html(notebook=False)
+        html = net.generate_html(notebook=False)
+        return self._patch_html(html)
+
+    # ------------------------------------------------------------------
+    # HTML post-processing
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _patch_html(html: str) -> str:
+        """
+        Remove default browser body margin so the vis.js canvas and its
+        overlay navigation buttons (zoom, fit, pan) fill the iframe exactly.
+        Without this, the 8 px body margin shifts the canvas down and the
+        bottom controls are clipped by the iframe boundary.
+        """
+        css = (
+            "<style>"
+            "html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;}"
+            "</style>"
+        )
+        return html.replace("</head>", css + "</head>", 1)

@@ -1,7 +1,14 @@
 """Step 3 — Knowledge Graph Visualization page."""
 
+import base64
+
 import streamlit as st
-import streamlit.components.v1 as components
+
+
+def _html_to_iframe_src(html: str) -> str:
+    """Base64-encode a full HTML document for use as a data: URL in st.iframe."""
+    b64 = base64.b64encode(html.encode("utf-8")).decode()
+    return f"data:text/html;base64,{b64}"
 
 
 def _render_build_prompt(get_graph_service) -> None:
@@ -50,7 +57,7 @@ def _render_graph_viewer(get_graph_service) -> None:
     )
     try:
         html = gs.get_visualization_html(show_contains=show_contains)
-        components.html(html, height=650, scrolling=True)
+        st.iframe(_html_to_iframe_src(html), height=680)
     except Exception as exc:
         st.error(f"Visualization failed: {exc}")
 
@@ -58,13 +65,13 @@ def _render_graph_viewer(get_graph_service) -> None:
     st.markdown("---")
     st.subheader("Subgraph Explorer")
     st.caption(
-        "Enter any node ID (e.g. REQ_001, RISK_002) to see its immediate neighborhood."
+        "Enter any node ID (e.g. REQ_956377, RISK_2AB1C4) to see its immediate neighborhood."
     )
 
     col_input, col_btn = st.columns([3, 1])
     with col_input:
         node_id = st.text_input(
-            "Node ID", placeholder="REQ_001", label_visibility="collapsed"
+            "Node ID", placeholder="REQ_956377", label_visibility="collapsed"
         )
     with col_btn:
         explore = st.button("Explore", type="secondary")
@@ -72,7 +79,7 @@ def _render_graph_viewer(get_graph_service) -> None:
     if node_id and explore:
         try:
             sub_html = gs.get_subgraph_html(node_id)
-            components.html(sub_html, height=550, scrolling=True)
+            st.iframe(_html_to_iframe_src(sub_html), height=550)
         except Exception as exc:
             st.error(f"Subgraph failed: {exc}")
 

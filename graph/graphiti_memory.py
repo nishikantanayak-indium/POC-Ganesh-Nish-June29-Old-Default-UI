@@ -26,6 +26,16 @@ from core.models import AtomicElement, ParsedDocument
 
 logger = logging.getLogger(__name__)
 
+# Graphiti calls build_indices_and_constraints() on every startup.
+# Neo4j raises EquivalentSchemaRuleAlreadyExists even with IF NOT EXISTS, which
+# graphiti logs at ERROR level. Suppress that specific noise here.
+class _IgnoreEquivalentSchema(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "EquivalentSchemaRuleAlreadyExists" not in record.getMessage()
+
+for _graphiti_logger_name in ("graphiti_core", "neo4j"):
+    logging.getLogger(_graphiti_logger_name).addFilter(_IgnoreEquivalentSchema())
+
 
 class GraphitiMemory:
     """
