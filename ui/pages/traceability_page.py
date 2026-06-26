@@ -110,9 +110,34 @@ def _render_chain_detail(get_graph_service, results: list) -> None:
 def render(get_graph_service) -> None:
     st.header("Inter-Document Traceability")
 
+    if not st.session_state.get("graph_built"):
+        st.info("👆 Build the knowledge graph first (Step 3).")
+        return
+
     results = st.session_state.get("coverage_results", [])
     if not results:
-        st.info("👆 Build the knowledge graph first (Step 3).")
+        # graph_built but coverage not in session (e.g. after page refresh) — recompute
+        try:
+            results = get_graph_service().get_coverage_results()
+            st.session_state["coverage_results"] = results
+        except Exception as exc:
+            st.error(f"Failed to compute coverage: {exc}")
+            return
+
+    if not results:
+        st.warning("No Requirements (type = 'Requirement') found in the graph.")
+        counts = get_graph_service().store.get_type_counts()
+        if counts:
+            st.markdown("**What IS in the graph right now:**")
+            for t, n in sorted(counts.items()):
+                st.markdown(f"- `{t}`: {n} node(s)")
+            st.info(
+                "If you see Clauses/Risks but no Requirements, your RFP file was likely "
+                "classified as a Contract or Risk Sheet. Rename it to include `rfp` or `rfx` "
+                "in the filename (e.g. `rfp_project.docx`), wipe the database, and re-ingest."
+            )
+        else:
+            st.error("The graph is empty — build the knowledge graph in Step 3 first.")
         return
 
     _render_summary(results)

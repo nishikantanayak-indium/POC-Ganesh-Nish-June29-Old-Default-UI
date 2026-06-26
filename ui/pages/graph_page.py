@@ -65,13 +65,13 @@ def _render_graph_viewer(get_graph_service) -> None:
     st.markdown("---")
     st.subheader("Subgraph Explorer")
     st.caption(
-        "Enter any node ID (e.g. REQ_956377, RISK_2AB1C4) to see its immediate neighborhood."
+        "Enter any node ID (e.g. REQ_001, RISK_002) to see its immediate neighborhood."
     )
 
     col_input, col_btn = st.columns([3, 1])
     with col_input:
         node_id = st.text_input(
-            "Node ID", placeholder="REQ_956377", label_visibility="collapsed"
+            "Node ID", placeholder="REQ_001", label_visibility="collapsed"
         )
     with col_btn:
         explore = st.button("Explore", type="secondary")

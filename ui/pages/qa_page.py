@@ -44,6 +44,14 @@ def render(get_graph_service) -> None:
         st.info("👆 Build the knowledge graph first (Step 3).")
         return
 
+    # Ensure coverage results are populated (needed by QAService intent handlers)
+    if not st.session_state.get("coverage_results"):
+        try:
+            results = get_graph_service().get_coverage_results()
+            st.session_state["coverage_results"] = results
+        except Exception:
+            pass
+
     _render_preset_buttons()
     st.markdown("---")
 

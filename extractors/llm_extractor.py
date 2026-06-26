@@ -1,4 +1,3 @@
-import hashlib
 import json
 import re
 
@@ -203,13 +202,15 @@ class LLMExtractor(IExtractor):
             if not duplicate:
                 deduped.append(elem)
 
-        # Stable content-hash IDs: same doc + same text → same ID across runs.
-        # This makes Neo4j MERGE and Qdrant upsert idempotent on re-ingestion.
+        # Sequential IDs scoped per document type prefix (REQ_001, CL_001, …).
+        # Duplicate ingestion of the same file is prevented upstream by the
+        # SHA-256 file-hash check in DocumentService.process_files().
+        type_counters: dict[str, int] = {}
         result: list[AtomicElement] = []
         for e in deduped:
             pfx = prefix_map.get(e["type"], "REQ")
-            hash_src = f"{doc.id}:{pfx}:{e['text'][:80]}"
-            elem_id = f"{pfx}_{hashlib.sha1(hash_src.encode()).hexdigest()[:6].upper()}"
+            type_counters[pfx] = type_counters.get(pfx, 0) + 1
+            elem_id = f"{pfx}_{type_counters[pfx]:03d}"
             result.append(
                 AtomicElement(
                     id=elem_id,

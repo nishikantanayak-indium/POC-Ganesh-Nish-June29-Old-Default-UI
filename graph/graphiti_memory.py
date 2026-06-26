@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from graphiti_core import Graphiti
@@ -98,6 +99,7 @@ class GraphitiMemory:
                 source_description=(
                     f"{doc.type.value} document: {doc.name}"
                 ),
+                reference_time=datetime.now(timezone.utc),
             )
 
     async def search_graph(

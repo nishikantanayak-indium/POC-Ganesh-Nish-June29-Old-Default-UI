@@ -265,6 +265,17 @@ class Neo4jGraphStore(IGraphStore):
                 f"Failed to fetch outgoing relationships for '{element_id}': {exc}"
             ) from exc
 
+    def get_type_counts(self) -> dict[str, int]:
+        """Return {type_value: count} for all Element nodes — useful for diagnostics."""
+        try:
+            with self._driver.session(database=self._db) as s:
+                result = s.run(
+                    "MATCH (e:Element) RETURN e.type AS t, count(e) AS cnt"
+                )
+                return {r["t"]: r["cnt"] for r in result}
+        except Exception:
+            return {}
+
     def get_document_hashes(self) -> dict[str, str]:
         """Return {doc_id: file_hash} for all Document nodes that have a stored hash."""
         try:
