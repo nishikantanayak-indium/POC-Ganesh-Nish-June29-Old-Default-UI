@@ -12,6 +12,7 @@ openai>=1.35.0
 # ── Embeddings — BGE-M3 ─────────────────────────────────────────────────────
 sentence-transformers>=3.0.0
 torch>=2.0.0
+torchvision>=0.15.0
 
 # ── Vector store — Qdrant ────────────────────────────────────────────────────
 qdrant-client>=1.9.0
