@@ -265,6 +265,19 @@ class Neo4jGraphStore(IGraphStore):
                 f"Failed to fetch outgoing relationships for '{element_id}': {exc}"
             ) from exc
 
+    def get_document_hashes(self) -> dict[str, str]:
+        """Return {doc_id: file_hash} for all Document nodes that have a stored hash."""
+        try:
+            with self._driver.session(database=self._db) as s:
+                result = s.run(
+                    "MATCH (e:Element {type: 'Document'}) "
+                    "WHERE e.doc_hash IS NOT NULL AND e.doc_hash <> '' "
+                    "RETURN e.id AS doc_id, e.doc_hash AS doc_hash"
+                )
+                return {r["doc_id"]: r["doc_hash"] for r in result}
+        except Exception as exc:
+            raise GraphStoreError(f"Failed to fetch document hashes: {exc}") from exc
+
     def clear(self) -> None:
         """Delete every node and relationship in the configured database."""
         try:

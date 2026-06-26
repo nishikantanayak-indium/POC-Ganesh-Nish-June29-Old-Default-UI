@@ -31,7 +31,7 @@ def _render_answer(item: dict) -> None:
         f"Evidence · query type: `{query_type}` · {len(evidence)} item(s)"
     ):
         if evidence:
-            st.dataframe(pd.DataFrame(evidence), use_container_width=True)
+            st.dataframe(pd.DataFrame(evidence), width="stretch")
         else:
             st.write("No evidence items returned.")
     st.markdown("---")

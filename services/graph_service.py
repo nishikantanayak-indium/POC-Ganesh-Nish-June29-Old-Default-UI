@@ -82,6 +82,7 @@ class GraphService:
         documents: list[ParsedDocument],
         elements: list[AtomicElement],
         relationships: list[Relationship],
+        doc_hashes: dict[str, str] | None = None,
     ) -> None:
         """
         Populate all three storage layers from extraction pipeline outputs.
@@ -102,6 +103,9 @@ class GraphService:
             All atomic elements extracted across all documents.
         relationships:
             Inferred typed directed relationships (cross-document included).
+        doc_hashes:
+            Optional ``{doc_id: sha256_hex}`` map; stored on Document nodes so
+            that re-uploads of the same file are detected and skipped.
         """
         logger.info(
             "Building knowledge graph: %d docs, %d elements, %d relationships",
@@ -111,7 +115,7 @@ class GraphService:
         )
 
         # --- 1. Typed schema graph in Neo4j ----------------------------
-        self.builder.build_from_elements(elements, relationships, documents)
+        self.builder.build_from_elements(elements, relationships, documents, doc_hashes)
         logger.info(
             "Neo4j build complete — nodes: %d, edges: %d",
             self.store.node_count,
@@ -127,6 +131,54 @@ class GraphService:
             doc_elements = [e for e in elements if e.document_id == doc.id]
             self.graphiti.ingest_document_sync(doc, doc_elements)
         logger.info("Graphiti ingestion complete")
+
+    # ------------------------------------------------------------------
+    # Persistence helpers
+    # ------------------------------------------------------------------
+
+    def load_existing_data(self) -> tuple[list[AtomicElement], list[CoverageResult]]:
+        """
+        Restore session state from an already-populated Neo4j graph.
+
+        Call on app startup when Neo4j has nodes but session_state is empty
+        (e.g. after a page refresh or server restart).  No file re-upload or
+        LLM extraction is needed.
+
+        Returns
+        -------
+        tuple[list[AtomicElement], list[CoverageResult]]
+            Empty lists if the graph has no data.
+        """
+        elements = self.store.get_all_elements()
+        if not elements:
+            return [], []
+        coverage = self.builder.assess_coverage()
+        logger.info(
+            "Restored %d elements and %d coverage results from Neo4j",
+            len(elements),
+            len(coverage),
+        )
+        return elements, coverage
+
+    def get_ingested_doc_hashes(self) -> dict[str, str]:
+        """Return ``{doc_id: sha256_hex}`` for documents already in Neo4j."""
+        try:
+            return self.store.get_document_hashes()
+        except Exception:
+            return {}
+
+    def reset_graph(self) -> None:
+        """
+        Permanently delete all data from Neo4j and Qdrant.
+
+        This is the **only** place that calls ``store.clear()`` and
+        ``vector_store.clear()``.  UI code should call this method rather
+        than reaching into the stores directly, so the operation stays
+        intentional and auditable.
+        """
+        self.store.clear()
+        self.vector_store.clear()
+        logger.warning("Graph reset: all Neo4j nodes and Qdrant vectors deleted")
 
     # ------------------------------------------------------------------
     # Coverage & traceability

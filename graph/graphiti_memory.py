@@ -125,37 +125,52 @@ class GraphitiMemory:
     # Sync wrappers for Streamlit
     # ------------------------------------------------------------------
 
+    def _run_async(self, coro, timeout: int = 120) -> Any:
+        """
+        Safely run *coro* from any synchronous context.
+
+        Streamlit's ScriptRunner thread has no event loop.
+        ``asyncio.get_event_loop()`` raises ``DeprecationWarning`` in
+        Python 3.10+ and ``RuntimeError`` in 3.12+ when called from a
+        non-main thread without an existing loop.
+
+        Strategy:
+        * Try ``asyncio.get_running_loop()`` — raises ``RuntimeError`` when
+          there is no running loop (the normal Streamlit case).
+        * No running loop → ``asyncio.run()`` creates a fresh loop, runs
+          the coroutine, and tears the loop down cleanly.
+        * Running loop (e.g. Jupyter) → offload to a thread so we never
+          nest ``asyncio.run`` inside a running loop.
+
+        The Graphiti client is reset before each call because it is bound
+        to the event loop that created it; reusing it across loops raises
+        ``RuntimeError: Event loop is closed``.
+        """
+        import concurrent.futures
+
+        try:
+            asyncio.get_running_loop()
+            # There IS a running loop — run in a worker thread with its own loop
+            self._client = None
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, coro).result(timeout=timeout)
+        except RuntimeError:
+            # No running loop — safe to use asyncio.run() directly
+            self._client = None
+            return asyncio.run(coro)
+
     def ingest_document_sync(
         self,
         doc: ParsedDocument,
         elements: list[AtomicElement],
     ) -> None:
-        """
-        Synchronous wrapper around :meth:`ingest_document`.
+        """Synchronous wrapper around :meth:`ingest_document`.
 
-        Streamlit runs in a context where an event loop may already be
-        active (e.g. inside ``asyncio.run`` from a prior call or within
-        a Tornado/uvicorn loop).  This method handles both cases:
-
-        * If a running loop exists → offload to a ``ThreadPoolExecutor``
-          that runs ``asyncio.run`` in a fresh OS thread.
-        * Otherwise → call ``loop.run_until_complete`` directly.
-
-        Failures are caught and logged as warnings rather than raised, so
-        that Graphiti enrichment failures do not block the core POC flow.
+        Failures are caught and logged as warnings so that Graphiti
+        enrichment failures do not block the core POC flow.
         """
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    future = pool.submit(
-                        asyncio.run, self.ingest_document(doc, elements)
-                    )
-                    future.result(timeout=120)
-            else:
-                loop.run_until_complete(self.ingest_document(doc, elements))
+            self._run_async(self.ingest_document(doc, elements), timeout=120)
         except Exception as exc:
             logger.warning("[GraphitiMemory] Ingest warning: %s", exc)
 
@@ -164,26 +179,15 @@ class GraphitiMemory:
         query: str,
         num_results: int = 5,
     ) -> list[dict[str, Any]]:
-        """
-        Synchronous wrapper around :meth:`search_graph`.
+        """Synchronous wrapper around :meth:`search_graph`.
 
-        Returns an empty list on failure so callers can treat absent
-        Graphiti results as a graceful degradation.
+        Returns an empty list on failure so callers treat absent Graphiti
+        results as graceful degradation rather than an error.
         """
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    future = pool.submit(
-                        asyncio.run, self.search_graph(query, num_results)
-                    )
-                    return future.result(timeout=30)
-            else:
-                return loop.run_until_complete(
-                    self.search_graph(query, num_results)
-                )
+            return self._run_async(
+                self.search_graph(query, num_results), timeout=30
+            )
         except Exception as exc:
             logger.warning("[GraphitiMemory] Search warning: %s", exc)
             return []

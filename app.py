@@ -51,6 +51,7 @@ _DEFAULTS = {
     "coverage_results":  [],
     "chat_history":      [],
     "processing":        False,
+    "doc_hashes":        {},
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -92,7 +93,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
 )
 
 with tab1:
-    upload_page.render(get_doc_service)
+    upload_page.render(get_doc_service, get_graph_service)
 
 with tab2:
     extraction_page.render(get_doc_service)

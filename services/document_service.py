@@ -21,6 +21,7 @@ These outputs are then handed off to :class:`~services.graph_service.GraphServic
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 from typing import TYPE_CHECKING
@@ -54,6 +55,10 @@ class DocumentService:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_hash(file_bytes: bytes) -> str:
+        return hashlib.sha256(file_bytes).hexdigest()
 
     def process_file(
         self,
@@ -103,36 +108,53 @@ class DocumentService:
     def process_files(
         self,
         files: list[tuple[bytes, str]],
-    ) -> tuple[list[ParsedDocument], list[AtomicElement]]:
+        existing_hashes: dict[str, str] | None = None,
+    ) -> tuple[list[ParsedDocument], list[AtomicElement], dict[str, str]]:
         """
-        Parse and extract elements from multiple files in order.
+        Parse and extract elements from multiple files, skipping already-ingested ones.
 
         Parameters
         ----------
         files:
             A list of ``(file_bytes, filename)`` pairs.
+        existing_hashes:
+            Optional ``{doc_id: sha256_hex}`` map from Neo4j.  Files whose
+            SHA-256 matches a stored hash are skipped (they are already in the
+            graph and the content-hash IDs guarantee idempotent MERGEs).
 
         Returns
         -------
-        tuple[list[ParsedDocument], list[AtomicElement]]
-            All parsed documents and the union of all extracted elements.
-            Documents and elements are ordered to match the input order.
+        tuple[list[ParsedDocument], list[AtomicElement], dict[str, str]]
+            - New/changed documents processed this run
+            - Extracted elements for those documents
+            - ``{doc_id: sha256_hex}`` for the newly processed documents
         """
         all_docs: list[ParsedDocument] = []
         all_elements: list[AtomicElement] = []
+        new_hashes: dict[str, str] = {}
+
+        # Build reverse map: hash → doc_id so we can skip efficiently
+        known: set[str] = set((existing_hashes or {}).values())
 
         for file_bytes, filename in files:
+            file_hash = self._compute_hash(file_bytes)
+            if file_hash in known:
+                logger.info("Skipping '%s' — already ingested (hash match)", filename)
+                continue
             doc, elements = self.process_file(file_bytes, filename)
+            new_hashes[doc.id] = file_hash
             all_docs.append(doc)
             all_elements.extend(elements)
 
         logger.info(
-            "Processed %d file(s) → %d documents, %d elements total",
-            len(files),
+            "Processed %d new file(s) → %d documents, %d elements total "
+            "(%d skipped as duplicates)",
+            len(all_docs),
             len(all_docs),
             len(all_elements),
+            len(files) - len(all_docs),
         )
-        return all_docs, all_elements
+        return all_docs, all_elements, new_hashes
 
     def extract_cross_document_relationships(
         self,

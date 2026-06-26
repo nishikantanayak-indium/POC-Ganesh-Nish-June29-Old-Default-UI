@@ -19,6 +19,7 @@ def _render_build_prompt(get_graph_service) -> None:
                     st.session_state["parsed_docs"],
                     st.session_state["elements"],
                     st.session_state.get("relationships", []),
+                    doc_hashes=st.session_state.get("doc_hashes"),
                 )
                 st.session_state["coverage_results"] = gs.get_coverage_results()
                 st.session_state["graph_built"] = True
@@ -49,7 +50,7 @@ def _render_graph_viewer(get_graph_service) -> None:
     )
     try:
         html = gs.get_visualization_html(show_contains=show_contains)
-        components.html(html, height=650, scrolling=False)
+        components.html(html, height=650, scrolling=True)
     except Exception as exc:
         st.error(f"Visualization failed: {exc}")
 
@@ -71,7 +72,7 @@ def _render_graph_viewer(get_graph_service) -> None:
     if node_id and explore:
         try:
             sub_html = gs.get_subgraph_html(node_id)
-            components.html(sub_html, height=520, scrolling=False)
+            components.html(sub_html, height=550, scrolling=True)
         except Exception as exc:
             st.error(f"Subgraph failed: {exc}")
 

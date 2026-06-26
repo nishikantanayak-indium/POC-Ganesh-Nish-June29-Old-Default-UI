@@ -19,6 +19,7 @@ build/
 
 # ── Data & model cache ──────────────────────────────────────────────────────
 data/
+sample_data/
 *.pkl
 *.db
 

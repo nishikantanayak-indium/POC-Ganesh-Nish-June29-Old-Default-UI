@@ -188,20 +188,19 @@ class QdrantVectorStore(IVectorStore):
         """
         try:
             qvec: list[float] = self._embedder.embed_one(query)
-            hits = self._client.search(
+            response = self._client.query_points(
                 collection_name=self._collection,
-                query_vector=qvec,
+                query=qvec,
                 limit=n_results,
                 with_payload=True,
             )
             results: list[AtomicElement] = []
-            for hit in hits:
+            for hit in response.points:
                 elem_id: str = hit.payload.get("element_id", "")
                 if elem_id in self._cache:
                     results.append(self._cache[elem_id])
                 else:
-                    elem = self._payload_to_element(hit.payload)
-                    results.append(elem)
+                    results.append(self._payload_to_element(hit.payload))
             return results
         except VectorStoreError:
             raise
@@ -214,32 +213,12 @@ class QdrantVectorStore(IVectorStore):
         element_type: ElementType,
         n_results: int = 5,
     ) -> list[AtomicElement]:
-        """Like :meth:`search` but restricted to a single :class:`ElementType`.
-
-        Parameters
-        ----------
-        query:
-            Natural-language query string.
-        element_type:
-            Only elements of this type are considered.
-        n_results:
-            Maximum number of results to return.
-
-        Returns
-        -------
-        list[AtomicElement]
-            Ordered by descending cosine similarity.
-
-        Raises
-        ------
-        VectorStoreError
-            If the embed or filtered search call fails.
-        """
+        """Like :meth:`search` but restricted to a single :class:`ElementType`."""
         try:
             qvec: list[float] = self._embedder.embed_one(query)
-            hits = self._client.search(
+            response = self._client.query_points(
                 collection_name=self._collection,
-                query_vector=qvec,
+                query=qvec,
                 limit=n_results,
                 with_payload=True,
                 query_filter=Filter(
@@ -252,13 +231,12 @@ class QdrantVectorStore(IVectorStore):
                 ),
             )
             results: list[AtomicElement] = []
-            for hit in hits:
+            for hit in response.points:
                 elem_id: str = hit.payload.get("element_id", "")
                 if elem_id in self._cache:
                     results.append(self._cache[elem_id])
                 else:
-                    elem = self._payload_to_element(hit.payload)
-                    results.append(elem)
+                    results.append(self._payload_to_element(hit.payload))
             return results
         except VectorStoreError:
             raise

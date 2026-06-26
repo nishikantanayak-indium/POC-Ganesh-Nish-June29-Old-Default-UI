@@ -52,6 +52,7 @@ class GraphBuilder:
         elements: list[AtomicElement],
         relationships: list[Relationship],
         documents: list[ParsedDocument],
+        doc_hashes: dict[str, str] | None = None,
     ) -> None:
         """
         Populate the graph store from extraction pipeline outputs.
@@ -83,6 +84,7 @@ class GraphBuilder:
         self.store.clear()
 
         # --- 1. Document pseudo-nodes -----------------------------------
+        _hashes = doc_hashes or {}
         for doc in documents:
             with self.store._driver.session(database=self.store._db) as s:
                 s.run(
@@ -91,11 +93,13 @@ class GraphBuilder:
                     "    e.text = $text, "
                     "    e.source = $src, "
                     "    e.document_id = $did, "
-                    "    e.confidence = 1.0",
+                    "    e.confidence = 1.0, "
+                    "    e.doc_hash = $hash",
                     id=doc.id,
                     text=doc.name,
                     src=doc.type.value,
                     did=doc.id,
+                    hash=_hashes.get(doc.id, ""),
                 )
 
         # --- 2. Typed element nodes -------------------------------------

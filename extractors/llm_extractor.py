@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 
@@ -202,13 +203,13 @@ class LLMExtractor(IExtractor):
             if not duplicate:
                 deduped.append(elem)
 
-        # Renumber sequentially and convert to AtomicElement
-        type_counters: dict[str, int] = {}
+        # Stable content-hash IDs: same doc + same text → same ID across runs.
+        # This makes Neo4j MERGE and Qdrant upsert idempotent on re-ingestion.
         result: list[AtomicElement] = []
         for e in deduped:
             pfx = prefix_map.get(e["type"], "REQ")
-            type_counters[pfx] = type_counters.get(pfx, 0) + 1
-            elem_id = f"{pfx}_{type_counters[pfx]:03d}"
+            hash_src = f"{doc.id}:{pfx}:{e['text'][:80]}"
+            elem_id = f"{pfx}_{hashlib.sha1(hash_src.encode()).hexdigest()[:6].upper()}"
             result.append(
                 AtomicElement(
                     id=elem_id,

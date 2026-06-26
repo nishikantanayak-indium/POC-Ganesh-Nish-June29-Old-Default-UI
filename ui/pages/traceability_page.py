@@ -46,7 +46,7 @@ def _render_coverage_table(results: list) -> None:
             for r in results
         ]
     )
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width="stretch", hide_index=True)
 
 
 def _render_chain_detail(get_graph_service, results: list) -> None:

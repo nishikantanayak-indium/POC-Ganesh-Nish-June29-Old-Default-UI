@@ -50,7 +50,7 @@ def _render_elements_table(elements: list) -> None:
     )
     st.dataframe(
         df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "Confidence": st.column_config.ProgressColumn(
@@ -79,7 +79,7 @@ def _render_relationships_section(get_doc_service, elements: list) -> None:
                 for r in rels
             ]
         )
-        st.dataframe(rel_df, use_container_width=True, hide_index=True)
+        st.dataframe(rel_df, width="stretch", hide_index=True)
 
     if st.button("🔗 Extract Cross-Document Relationships", type="primary"):
         with st.spinner("Inferring relationships with GPT-4o…"):

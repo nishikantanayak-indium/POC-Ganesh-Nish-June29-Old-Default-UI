@@ -17,7 +17,7 @@ def _detect_doc_type(filename: str) -> str:
     return "❓ Unknown"
 
 
-def render(get_doc_service) -> None:
+def render(get_doc_service, get_graph_service=None) -> None:
     st.header("Upload Documents")
     st.markdown(
         "Upload your **RFP**, **Risk Sheet**, and **Contract** documents (PDF or DOCX). "
@@ -48,7 +48,7 @@ def render(get_doc_service) -> None:
         }
         for f in uploaded
     ]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
     with col_info:
         st.markdown("### Ready")
@@ -71,10 +71,26 @@ def render(get_doc_service) -> None:
         with st.spinner("Parsing documents and extracting elements with GPT-4o…"):
             try:
                 ds = get_doc_service()
-                docs, elements = ds.process_files(file_list)
+                existing_hashes = (
+                    get_graph_service().get_ingested_doc_hashes()
+                    if get_graph_service
+                    else {}
+                )
+                docs, elements, new_hashes = ds.process_files(
+                    file_list, existing_hashes=existing_hashes
+                )
+
+                if not docs and existing_hashes:
+                    st.info(
+                        "All uploaded files were already ingested — no new extraction needed. "
+                        "Use **Load from Graph** in the sidebar to restore the session."
+                    )
+                    st.session_state["processing"] = False
+                    return
 
                 st.session_state["parsed_docs"]      = docs
                 st.session_state["elements"]         = elements
+                st.session_state["doc_hashes"]       = new_hashes
                 st.session_state["relationships"]    = []
                 st.session_state["graph_built"]      = False
                 st.session_state["coverage_results"] = []
