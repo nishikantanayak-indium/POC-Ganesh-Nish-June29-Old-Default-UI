@@ -1,20 +1,21 @@
-# GraphRAG POC — Knowledge Mapping
+# GraphRAG POC — Procurement Intelligence
 
-> **Convert procurement documents into a queryable knowledge graph.**
-> Upload RFP + Risk Sheet + Contract → extract atomic elements → build a graph → trace coverage → ask questions in plain English.
+> **Convert procurement documents into a queryable knowledge graph with a professional React UI.**
+> Upload RFP + Risk Sheet + Contract → automated pipeline → interactive graph → traceability lineage → natural language Q&A.
 
 ---
 
 ## Table of Contents
 
 1. [What This Does](#what-this-does)
-2. [Prerequisites](#prerequisites)
-3. [Quick Start](#quick-start)
-4. [Configuration Reference](#configuration-reference)
-5. [Project Structure](#project-structure)
-6. [How the Demo Works](#how-the-demo-works)
-7. [Continuing Development](#continuing-development)
-8. [Troubleshooting](#troubleshooting)
+2. [Architecture](#architecture)
+3. [Prerequisites](#prerequisites)
+4. [Quick Start](#quick-start)
+5. [Configuration Reference](#configuration-reference)
+6. [Project Structure](#project-structure)
+7. [UI Walkthrough](#ui-walkthrough)
+8. [Continuing Development](#continuing-development)
+9. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -30,122 +31,168 @@ This POC proves that procurement document intelligence can be fully automated us
 
 All nodes land in **Neo4j**. Typed edges (`COVERS`, `INTRODUCES_RISK`, `MITIGATED_BY`, `LINKED_TO_LD`, …) connect them across documents. You can then:
 
-- See a live interactive graph (PyVis)
-- Get a traceability matrix — which requirements are covered, partial, or missing
+- Watch a real-time animated pipeline process your documents step by step
+- Explore an interactive knowledge graph with proper nodes and edge labels
+- Get a traceability lineage — which requirements are covered, partial, or missing
 - Ask natural language questions — answered by graph traversal + semantic search, cited to exact pages
 
-**Tech stack at a glance**
+---
 
-| Role | Technology |
-|------|-----------|
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  React Frontend  (Vite · TypeScript · React Flow)        │
+│  localhost:5173                                           │
+│                                                          │
+│  Upload → Pipeline → Graph → Traceability → Chat         │
+└────────────────────────┬─────────────────────────────────┘
+                         │ HTTP + SSE (streaming)
+┌────────────────────────▼─────────────────────────────────┐
+│  FastAPI Backend  (uvicorn)                               │
+│  localhost:8000                                           │
+│                                                          │
+│  /api/pipeline/run  (POST, SSE stream)                   │
+│  /api/graph/data    (GET)                                │
+│  /api/traceability  (GET)                                │
+│  /api/chat/ask      (POST)                               │
+└───┬──────────────┬──────────────────────────────────────┘
+    │              │
+┌───▼───┐      ┌───▼──────────────────────────────────────┐
+│Neo4j  │      │  Python Services                         │
+│:7687  │      │  DocumentService → LLMExtractor → GPT-4o │
+└───────┘      │  GraphService    → Neo4j + Qdrant        │
+               │  QAService       → Graph + Vector + LLM  │
+┌───────┐      └──────────────────────────────────────────┘
+│Qdrant │
+│:6333  │
+└───────┘
+```
+
+**Tech stack**
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React 18 · TypeScript · Vite · React Flow · Tailwind CSS · Framer Motion |
+| API | FastAPI · uvicorn · SSE streaming |
 | LLM extraction | GPT-4o (OpenAI function calling) |
-| Graph store | Neo4j 5.x |
+| Graph store | Neo4j 5.x (Cypher MERGE, typed edges) |
 | Graph memory | Graphiti-core (episodic memory on Neo4j) |
 | Vector store | Qdrant |
-| Embeddings | BAAI/bge-m3 (sentence-transformers) |
-| UI | Streamlit |
+| Embeddings | BAAI/bge-m3 (sentence-transformers, 1024-dim) |
 
 ---
 
 ## Prerequisites
 
-### 1. System requirements
+### System requirements
 
 | Tool | Minimum version | Check |
 |------|----------------|-------|
 | Python | 3.11+ | `python3 --version` |
+| Node.js | 18+ | `node --version` |
 | Docker Desktop | 4.x | `docker --version` |
-| Docker Compose | v2 | `docker compose version` |
 
-> **macOS / Linux only tested.** Windows works via WSL2 with Docker Desktop.
+> macOS and Linux tested. Windows works via WSL2 with Docker Desktop.
 
-### 2. API keys
-
-You need one API key:
+### API keys
 
 | Service | Where to get it | Required? |
 |---------|----------------|-----------|
-| **OpenAI** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | **Yes** — used for GPT-4o extraction and Q&A |
+| **OpenAI** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | **Yes** — GPT-4o for extraction and Q&A |
 
-> GPT-4o costs approximately **$0.01–0.05 per document** for extraction depending on length.
+> GPT-4o costs approximately **$0.01–0.05 per document** depending on length.
 
-### 3. Ports that must be free
+### Ports that must be free
 
 | Port | Used by |
 |------|--------|
-| `7474` | Neo4j browser (optional, for debugging) |
-| `7687` | Neo4j Bolt driver |
-| `6333` | Qdrant REST API |
+| `7474` | Neo4j browser (optional debug UI) |
+| `7687` | Neo4j Bolt |
+| `6333` | Qdrant REST |
 | `6334` | Qdrant gRPC |
-| `8501` | Streamlit UI |
+| `8000` | FastAPI backend |
+| `5173` | React frontend (Vite dev server) |
 
 ---
 
 ## Quick Start
 
-### Step 1 — Clone / download
+### 1 — Clone / download
 
 ```bash
 cd ~/Desktop
-# If using git:
 git clone <repo-url> "GraphRAG POC"
 cd "GraphRAG POC"
 ```
 
-### Step 2 — Set your API key
+### 2 — Set your API key
 
 ```bash
-cp .env.example .env
+cp backend/.env.example backend/.env
 ```
 
-Open `.env` and set your key:
+Open `backend/.env` and fill in your key:
 
 ```env
 OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxx
 ```
 
-Everything else in `.env` has working defaults — leave them unless you need custom ports or passwords.
+Everything else has working defaults.
 
-### Step 3 — Start Neo4j and Qdrant
+### 3 — Start Neo4j and Qdrant
 
 ```bash
 docker compose up -d
 ```
 
-Wait ~20 seconds for both services to be healthy:
+Wait ~20 seconds, then verify:
 
 ```bash
-docker compose ps
-# Both should show "healthy" or "running"
+docker compose ps   # both should show "healthy" or "running"
 ```
 
-> **Neo4j browser** is available at http://localhost:7474 (user: `neo4j`, password: `password`) — useful for debugging the graph directly.
+> **Neo4j browser** is at http://localhost:7474 (user: `neo4j`, password: `password`).
 
-### Step 4 — Create virtual environment and install dependencies
+### 4 — Install Python dependencies
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 ```
 
-> First run downloads the BGE-M3 embedding model (~2 GB). This happens once and is cached locally by Hugging Face.
+> First run downloads the BGE-M3 model (~2 GB). This happens once and is cached by Hugging Face.
 
-### Step 5 — Run the app
+### 5 — Install frontend dependencies
 
 ```bash
-.venv/bin/streamlit run app.py
-# or with venv activated:
-streamlit run app.py
+cd frontend
+npm install
+cd ..
 ```
 
-Open **http://localhost:8501** in your browser.
+### 6 — Start both servers
+
+**Terminal 1 — API:**
+```bash
+./start_api.sh
+# → http://localhost:8000
+```
+
+**Terminal 2 — Frontend:**
+```bash
+./start_frontend.sh
+# → http://localhost:5173
+```
+
+Open **http://localhost:5173** in your browser.
 
 ---
 
 ## Configuration Reference
 
-All settings live in `.env`. The full reference:
+All settings live in `backend/.env`:
 
 ```env
 # ── OpenAI ──────────────────────────────────────────────────────────────────
@@ -175,7 +222,7 @@ MAX_CHUNK_CHARS=3000              # Document chunk size fed to GPT-4o
 CHUNK_OVERLAP_CHARS=200           # Overlap between consecutive chunks
 ```
 
-### Switching to a cheaper model for development
+**Development shortcut — faster and cheaper:**
 
 ```env
 LLM_MODEL=gpt-4o-mini
@@ -183,7 +230,7 @@ EMBEDDING_MODEL=all-MiniLM-L6-v2
 EMBEDDING_DIMENSION=384
 ```
 
-`all-MiniLM-L6-v2` is 90 MB vs 2 GB for BGE-M3. Good enough for testing extraction logic.
+`all-MiniLM-L6-v2` is 90 MB vs 2 GB for BGE-M3 — good enough to test extraction logic.
 
 ---
 
@@ -192,154 +239,180 @@ EMBEDDING_DIMENSION=384
 ```
 GraphRAG POC/
 │
-├── app.py                          ← Streamlit entry point (thin orchestrator)
-├── requirements.txt
-├── .env.example                    ← Copy to .env and fill in keys
-├── docker-compose.yml              ← Neo4j 5.19 + Qdrant
+├── backend/                        ← All Python (FastAPI + services + graph)
+│   ├── api/
+│   │   ├── main.py                 ← FastAPI app, CORS, router registration
+│   │   ├── deps.py                 ← Singleton service instances
+│   │   └── routes/
+│   │       ├── pipeline.py         ← POST /api/pipeline/run  (SSE stream)
+│   │       ├── graph.py            ← GET  /api/graph/data|subgraph|stats
+│   │       ├── traceability.py     ← GET  /api/traceability/coverage|chain
+│   │       ├── chat.py             ← POST /api/chat/ask
+│   │       └── status.py           ← GET/POST /api/status|reset|elements
+│   │
+│   ├── config/
+│   │   └── settings.py             ← All env vars as a frozen dataclass
+│   │
+│   ├── core/                       ← Pure domain — no I/O, no framework deps
+│   │   ├── models.py               ← AtomicElement, Relationship, ParsedDocument, CoverageResult
+│   │   ├── interfaces.py           ← IParser, IExtractor, IGraphStore, IVectorStore (ABCs)
+│   │   └── exceptions.py           ← Typed exception hierarchy
+│   │
+│   ├── parsers/                    ← Text extraction only
+│   │   ├── pdf_parser.py           ← PyMuPDF
+│   │   └── docx_parser.py          ← python-docx
+│   │
+│   ├── extractors/
+│   │   └── llm_extractor.py        ← GPT-4o function calling → AtomicElement + Relationship
+│   │
+│   ├── graph/
+│   │   ├── neo4j_store.py          ← IGraphStore on Neo4j (Cypher MERGE / MATCH)
+│   │   ├── graphiti_memory.py      ← Graphiti episodic memory (async + sync wrappers)
+│   │   ├── builder.py              ← GraphBuilder: build, assess_coverage, traceability
+│   │   └── visualizer.py           ← Legacy PyVis generator (used by old Streamlit UI)
+│   │
+│   ├── vector/
+│   │   ├── embedder.py             ← BGEEmbedder (lazy-loads BAAI/bge-m3)
+│   │   └── qdrant_store.py         ← IVectorStore on Qdrant
+│   │
+│   ├── services/                   ← Orchestration — the only layer the API talks to
+│   │   ├── document_service.py     ← parse + extract + SHA-256 dedup
+│   │   ├── graph_service.py        ← Neo4j + Qdrant + Graphiti build pipeline
+│   │   └── qa_service.py           ← intent detection → evidence → GPT-4o synthesis
+│   │
+│   ├── ui/                         ← Legacy Streamlit UI (kept, not default)
+│   ├── app.py                      ← Legacy Streamlit entry point
+│   ├── requirements.txt
+│   ├── .env                        ← Secrets (gitignored — copy from .env.example)
+│   └── .env.example
 │
-├── config/
-│   └── settings.py                 ← All env vars loaded here as frozen dataclass
+├── frontend/                       ← React + Vite + TypeScript
+│   ├── src/
+│   │   ├── App.tsx                 ← Tab navigation, global state, header
+│   │   ├── types.ts                ← Shared TypeScript types
+│   │   ├── index.css               ← Tailwind + custom dark theme
+│   │   ├── api/
+│   │   │   └── client.ts           ← fetch wrappers + SSE stream reader
+│   │   └── components/
+│   │       ├── UploadZone.tsx      ← Dropzone + pipeline trigger
+│   │       ├── PipelineProgress.tsx← Animated step cards with live progress bars
+│   │       ├── KnowledgeGraph.tsx  ← React Flow graph (dagre layout, custom nodes)
+│   │       ├── ElementsTable.tsx   ← Filterable/sortable elements table
+│   │       ├── TraceabilityView.tsx← Coverage metrics + React Flow lineage diagram
+│   │       └── ChatWindow.tsx      ← Floating chat bubble + conversation panel
+│   ├── package.json
+│   └── vite.config.ts              ← Proxies /api → localhost:8000
 │
-├── core/                           ← Pure domain — no I/O, no framework deps
-│   ├── models.py                   ← AtomicElement, Relationship, ParsedDocument, CoverageResult
-│   ├── interfaces.py               ← IParser, IExtractor, IGraphStore, IVectorStore (ABCs)
-│   └── exceptions.py               ← Typed exception hierarchy
-│
-├── parsers/                        ← Text extraction only
-│   ├── __init__.py                 ← ParserFactory.get_parser(filename)
-│   ├── pdf_parser.py               ← PyMuPDF
-│   └── docx_parser.py              ← python-docx
-│
-├── extractors/
-│   ├── __init__.py
-│   └── llm_extractor.py            ← GPT-4o function calling → AtomicElement + Relationship
-│
-├── graph/
-│   ├── __init__.py
-│   ├── neo4j_store.py              ← IGraphStore on Neo4j (Cypher MERGE / MATCH)
-│   ├── graphiti_memory.py          ← Graphiti episodic memory layer (async + sync wrappers)
-│   ├── builder.py                  ← GraphBuilder: build, assess_coverage, traceability chain
-│   └── visualizer.py               ← PyVis HTML generator
-│
-├── vector/
-│   ├── __init__.py
-│   ├── embedder.py                 ← BGEEmbedder (lazy-loads BAAI/bge-m3)
-│   └── qdrant_store.py             ← IVectorStore on Qdrant
-│
-├── services/                       ← Orchestration — the only layer app.py talks to
-│   ├── __init__.py
-│   ├── document_service.py         ← parse + extract pipeline
-│   ├── graph_service.py            ← Neo4j + Qdrant + Graphiti build pipeline
-│   └── qa_service.py               ← intent detection → graph traversal + synthesis
-│
-└── ui/
-    ├── components/
-    │   └── sidebar.py              ← Infrastructure status + session controls
-    └── pages/
-        ├── upload_page.py          ← Step 1: file upload + GPT-4o extraction trigger
-        ├── extraction_page.py      ← Step 2: elements table + relationship extraction
-        ├── graph_page.py           ← Step 3: build graph + PyVis visualization
-        ├── traceability_page.py    ← Step 4: coverage matrix + traceability chain
-        └── qa_page.py              ← Step 5: NL Q&A with chat history
+├── .venv/                          ← Python virtual environment (gitignored)
+├── .gitignore
+├── docker-compose.yml              ← Neo4j 5.x + Qdrant
+├── start_api.sh                    ← cd backend && uvicorn api.main:app
+├── start_frontend.sh               ← cd frontend && npm run dev
+└── TECHNICAL_GUIDE.md              ← In-depth technical documentation
 ```
 
 ---
 
-## How the Demo Works
+## UI Walkthrough
 
-### The 5-step flow
+### Upload tab
+
+Drop PDF or DOCX files. Name them with keywords for automatic document-type detection:
+
+| Filename keyword | Detected as |
+|-----------------|-------------|
+| `rfp`, `rfx`, `tender` | RFP → extracts `Requirement` nodes |
+| `risk`, `rmc`, `register` | Risk Sheet → extracts `Risk` + `Mitigation` |
+| `contract`, `offer`, `agreement` | Contract → extracts `Clause` + `LD` |
+
+Click **Run Pipeline**. The five steps stream live:
+
+| Step | What happens |
+|------|-------------|
+| 📄 Parse Documents | Text extracted from PDF/DOCX page by page |
+| 🔍 Extract Elements (LLM) | GPT-4o reads each chunk and calls a typed function schema |
+| 🕸️ Build Knowledge Graph | Nodes + edges written to Neo4j with `MERGE` semantics |
+| 🔢 Index Semantic Vectors | BGE-M3 embeddings upserted to Qdrant |
+| 📊 Assess Coverage | Coverage verdict computed per Requirement via graph traversal |
+
+Re-uploading the same file is safe — SHA-256 hash dedup skips it silently.
+
+### Elements tab
+
+Filterable table of all extracted elements. Filter by type pill, search by text, sort any column, expand a row for full content.
+
+### Graph tab
+
+Interactive knowledge graph powered by **React Flow**:
+
+| Node colour | Element type |
+|------------|-------------|
+| Indigo | Requirement |
+| Emerald | Clause |
+| Red | Risk |
+| Amber | Mitigation |
+| Purple | LD (Liquidated Damages) |
+
+Edges carry labels (`COVERS`, `PARTIALLY_COVERS`, `INTRODUCES_RISK`, …). Click any node for a detail panel. Type a node ID in the **Subgraph Explorer** to zoom into its 1-hop neighbourhood.
+
+### Traceability tab
+
+Left panel lists every Requirement with its coverage status badge and clause/risk counts. Click a requirement to render its full **lineage diagram**:
 
 ```
-Upload  →  Extract  →  Build Graph  →  Traceability  →  Ask
- PDF        GPT-4o      Neo4j +          Coverage         NL Q&A
- DOCX       func call   Graphiti         matrix           GPT-4o
+[Requirement] ──COVERS──► [Clause]
+              ──RISK──►   [Risk] ──MITIGATED BY──► [Mitigation]
+                                 ──LINKED TO LD──► [LD]
 ```
 
-**Step 1 — Upload**
-Drop in up to 3 files. Name them with keywords for auto-detection:
-- `*rfp*`, `*rfx*`, `*tender*` → RFP
-- `*risk*`, `*rmc*`, `*register*` → Risk Sheet
-- `*contract*`, `*offer*`, `*agreement*` → Contract
+Identified gaps are highlighted below the diagram.
 
-**Step 2 — Extract**
-Clicks "Process Documents": GPT-4o reads each file in chunks and calls a typed function schema to return `Requirement`, `Clause`, `Risk`, `Mitigation`, `LD` elements. Then "Extract Relationships" infers `COVERS`, `INTRODUCES_RISK`, `MITIGATED_BY`, etc. across all documents.
+### Chat (floating bubble, bottom-right)
 
-**Step 3 — Build Graph**
-Nodes go into Neo4j. Vectors go into Qdrant. Document pages go into Graphiti as episodes. The interactive PyVis graph appears — hover nodes for details, click edges for relationship info.
+Ask anything in plain English. The backend classifies intent and picks the right evidence strategy:
 
-**Step 4 — Traceability**
-Every `Requirement` gets a coverage verdict: ✅ Covered / ⚠️ Partial / ❌ Not Covered. Click any row to expand its full traceability chain (requirement → clause → risk → mitigation → LD) and see identified gaps.
+| Question pattern | Strategy |
+|-----------------|---------|
+| "not covered", "gap", "missing coverage" | Cypher traversal → uncovered Requirements |
+| "risk" + "partial" | Cypher traversal → risks on partially-covered Requirements |
+| "no mitigation", "unmitigated" | Graph traversal → Risks without MITIGATED_BY edge |
+| "no ld", "no penalty" | Graph traversal → Risks without LINKED_TO_LD edge |
+| Everything else | BGE-M3 vector search + Graphiti entity search + GPT-4o synthesis |
 
-**Step 5 — Ask**
-Type any question. The QAService classifies intent and runs the right strategy:
-- Coverage gaps → Cypher graph traversal
-- Risk questions → multi-hop Cypher
-- Open questions → BGE-M3 vector search + Graphiti semantic search + GPT-4o synthesis
+Each answer shows a **query type tag** so you know which strategy was used.
 
 ---
 
 ## Continuing Development
 
-### Adding a new parser (e.g. Excel, plain text)
+### Adding a new parser (e.g. Excel)
 
-1. Create `parsers/excel_parser.py` implementing `IParser` from `core/interfaces.py`
-2. Register it in `parsers/__init__.py`:
-
-```python
-from .excel_parser import ExcelParser
-
-class ParserFactory:
-    _parsers = [PDFParser(), DOCXParser(), ExcelParser()]   # add here
-```
+1. Create `backend/parsers/excel_parser.py` implementing `IParser` from `core/interfaces.py`
+2. Register it in `backend/parsers/__init__.py` inside `ParserFactory._parsers`
 
 No other files need to change.
 
 ### Adding a new element type
 
-1. Add the value to `ElementType` enum in `core/models.py`
-2. Update the `extract_elements` system prompt in `extractors/llm_extractor.py` to describe the new type
-3. Add the ID prefix mapping in `_type_str_to_enum` and `prefix_map` inside `LLMExtractor`
-
-### Adding a new relationship type
-
-1. Add the value to `RelationshipType` enum in `core/models.py`
-2. Update the `RELATIONSHIP_TOOL` enum list in `extractors/llm_extractor.py`
-3. Update the system prompt in `extract_relationships()` to describe the new type
-4. Neo4j handles dynamic relationship types — no schema migration needed
-
-### Changing the LLM
-
-Settings-driven — just change `.env`:
-
-```env
-LLM_MODEL=gpt-4o-mini    # cheaper, faster
-```
-
-The `LLMExtractor` uses whatever `settings.llm_model` returns.
-
-### Swapping Neo4j for another graph store
-
-1. Create `graph/your_store.py` implementing `IGraphStore` from `core/interfaces.py`
-2. In `graph/__init__.py` swap the import
-3. In `services/graph_service.py` change `Neo4jGraphStore()` to `YourStore()`
+1. Add the value to `ElementType` in `backend/core/models.py`
+2. Update the extraction prompt in `backend/extractors/llm_extractor.py`
+3. Add the ID prefix and type-to-enum mapping in the same file
+4. Add the node colour in `frontend/src/components/KnowledgeGraph.tsx` (`TYPE_CONFIG`)
 
 ### Adding a new Q&A intent
 
-In `services/qa_service.py`:
-
+In `backend/services/qa_service.py`:
 1. Add keyword detection in `_classify_intent()`
-2. Add a `_gather_<intent>_evidence()` method with the Cypher/vector query
+2. Add a `_gather_<intent>_evidence()` method
 3. Map the new intent in `answer()`
 
-### Running tests (when added)
+In `frontend/src/components/ChatWindow.tsx` add the label to `QUERY_TYPE_LABELS`.
 
-```bash
-# Unit tests (no infra needed)
-.venv/bin/pytest tests/unit/
+### Swapping Neo4j for another graph store
 
-# Integration tests (needs docker compose up first)
-.venv/bin/pytest tests/integration/
-```
+1. Create `backend/graph/your_store.py` implementing `IGraphStore` from `core/interfaces.py`
+2. Swap the import in `backend/graph/__init__.py`
+3. Change `Neo4jGraphStore()` to `YourStore()` in `backend/services/graph_service.py`
 
 ### Useful debug endpoints
 
@@ -347,22 +420,23 @@ In `services/qa_service.py`:
 |-----|--------------|
 | http://localhost:7474 | Neo4j Browser — run Cypher directly |
 | http://localhost:6333/dashboard | Qdrant dashboard |
-| http://localhost:6333/collections | Qdrant collections JSON |
+| http://localhost:8000/docs | FastAPI auto-generated Swagger UI |
+| http://localhost:8000/api/status | Current graph node/edge counts |
 
-**Useful Cypher queries for debugging in Neo4j browser:**
+**Useful Cypher for Neo4j Browser:**
 
 ```cypher
-// See all nodes and relationships
+-- All nodes and relationships
 MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 50
 
-// Count by type
+-- Count by type
 MATCH (e:Element) RETURN e.type, count(e) ORDER BY count(e) DESC
 
-// Trace a specific requirement
+-- Trace a requirement
 MATCH path = (req:Element {id: 'REQ_001'})-[*1..3]-(related)
 RETURN path
 
-// Find all uncovered requirements
+-- Uncovered requirements
 MATCH (req:Element {type: 'Requirement'})
 WHERE NOT (req)<-[:COVERS]-() AND NOT (req)<-[:PARTIALLY_COVERS]-()
 RETURN req.id, req.text
@@ -374,69 +448,60 @@ RETURN req.id, req.text
 
 ### "Neo4j: Connection refused"
 
-Docker container is not running or still starting.
-
 ```bash
 docker compose ps          # check status
 docker compose logs neo4j  # check for errors
-docker compose up -d       # restart if needed
+docker compose up -d       # restart
 ```
 
-Wait ~20 seconds after starting for Neo4j to be fully ready.
-
-### "Qdrant: Connection refused"
-
-```bash
-docker compose logs qdrant
-docker compose up -d qdrant
-```
+Wait ~20 seconds after starting.
 
 ### "OPENAI_API_KEY is not set"
 
-Make sure you copied `.env.example` to `.env` and set your key:
-
 ```bash
-cp .env.example .env
-# open .env and set OPENAI_API_KEY=sk-proj-...
+cp backend/.env.example backend/.env
+# then open backend/.env and set OPENAI_API_KEY=sk-proj-...
 ```
 
-### BGE-M3 model download is slow / fails
-
-The model downloads from Hugging Face on first run (~2 GB). If it fails:
+### BGE-M3 download slow / fails
 
 ```bash
 # Pre-download manually
-.venv/bin/python3 -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-m3')"
+.venv/bin/python3 -c "
+from sentence_transformers import SentenceTransformer
+SentenceTransformer('BAAI/bge-m3')
+"
 ```
 
-Or switch to a smaller model in `.env`:
+Or switch to a smaller model in `backend/.env`:
 
 ```env
 EMBEDDING_MODEL=all-MiniLM-L6-v2
 EMBEDDING_DIMENSION=384
 ```
 
-### "No elements extracted"
+### Frontend can't reach the API
 
-- Check your OpenAI API key has credits
-- The document might be image-based (scanned PDF) — PyMuPDF cannot extract text from scanned images. Use a text-based PDF or DOCX.
-- Lower `CONFIDENCE_THRESHOLD=0.4` in `.env` to be more permissive
+Make sure the FastAPI server is running on port 8000. The Vite dev server proxies `/api/*` → `localhost:8000` automatically (see `frontend/vite.config.ts`).
 
-### Graph visualization is blank
+```bash
+curl http://localhost:8000/health   # should return {"status":"ok"}
+```
 
-The graph may be empty if element extraction produced no results, or if the build step was skipped. Click "Reset Session" in the sidebar and redo from Step 1.
+### "No Requirements found" in Traceability
+
+The document type is inferred from the filename. If your RFP file isn't named with `rfp`, `rfx`, or `tender`, GPT-4o extracts Clauses instead of Requirements.
+
+Fix: rename the file (e.g. `rfp_project.pdf`), use **Wipe DB** in the header, then re-upload.
 
 ### Port conflicts
 
-If any port is already in use:
-
 ```bash
-# Find what's using port 7687
-lsof -i :7687
-
-# Edit docker-compose.yml to use different ports, e.g. 7688:7687
-# Then update .env: NEO4J_URI=bolt://localhost:7688
+lsof -i :8000    # find what's using the API port
+lsof -i :7687    # find what's using Neo4j Bolt
 ```
+
+Edit `docker-compose.yml` to remap ports and update `backend/.env` accordingly.
 
 ---
 
@@ -446,18 +511,18 @@ lsof -i :7687
 # Stop containers (data preserved in Docker volumes)
 docker compose stop
 
-# Stop and remove containers + volumes (full reset)
+# Full reset — removes containers and volumes
 docker compose down -v
 ```
 
 ---
 
-## Phase 2 — Offer Generation (Planned)
+## Phase 2 — Planned
 
 The current POC covers knowledge extraction and coverage assessment. Phase 2 will add:
 
-- **Clause recommendation** — suggest contract clauses that would cover uncovered requirements
-- **Offer generation** — draft a response offer for a selected RFP requirement using traced clauses as templates
+- **Clause recommendation** — suggest contract clauses for uncovered requirements
+- **Offer generation** — draft a response offer using traced clauses as templates
 - **Gap remediation** — auto-suggest mitigations for unmitigated risks
 
-These build directly on the graph already constructed in Phase 1.
+These build directly on the graph constructed in Phase 1.

@@ -202,15 +202,17 @@ class LLMExtractor(IExtractor):
             if not duplicate:
                 deduped.append(elem)
 
-        # Sequential IDs scoped per document type prefix (REQ_001, CL_001, …).
-        # Duplicate ingestion of the same file is prevented upstream by the
-        # SHA-256 file-hash check in DocumentService.process_files().
+        # Prefix IDs with a short doc slug so elements from different documents
+        # never collide on MERGE in Neo4j (e.g. RFP_REQ_001 vs CON_REQ_001).
+        raw_slug = re.sub(r"^DOC_", "", doc.id).upper()
+        doc_slug = re.sub(r"[^A-Z0-9]", "", raw_slug)[:4] or "DOC"
+
         type_counters: dict[str, int] = {}
         result: list[AtomicElement] = []
         for e in deduped:
             pfx = prefix_map.get(e["type"], "REQ")
             type_counters[pfx] = type_counters.get(pfx, 0) + 1
-            elem_id = f"{pfx}_{type_counters[pfx]:03d}"
+            elem_id = f"{doc_slug}_{pfx}_{type_counters[pfx]:03d}"
             result.append(
                 AtomicElement(
                     id=elem_id,
@@ -252,7 +254,7 @@ class LLMExtractor(IExtractor):
                 ],
                 tools=[RELATIONSHIP_TOOL],
                 tool_choice={"type": "function", "function": {"name": "create_relationships"}},
-                max_tokens=2000,
+                max_tokens=4000,
             )
             tc = resp.choices[0].message.tool_calls
             if not tc:

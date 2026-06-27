@@ -69,7 +69,7 @@ class Settings:
 
     # --- Quality thresholds ---
     confidence_threshold: float = field(
-        default_factory=lambda: float(os.environ.get("CONFIDENCE_THRESHOLD", "0.6"))
+        default_factory=lambda: float(os.environ.get("CONFIDENCE_THRESHOLD", "0.5"))
     )
 
     # --- Logging ---

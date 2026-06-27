@@ -1,50 +1,86 @@
-# ── Secrets ────────────────────────────────────────────────────────────────
-.env
-
-# ── Virtual environment ─────────────────────────────────────────────────────
-.venv/
-venv/
-env/
-
-# ── Python ──────────────────────────────────────────────────────────────────
+# ── Python / Backend ──────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-.Python
+*.so
+*.egg
 *.egg-info/
 dist/
 build/
-*.egg
+.eggs/
 
-# ── Data & model cache ──────────────────────────────────────────────────────
-data/
-sample_data/
-*.pkl
-*.db
+# Virtual environment (kept at project root)
+.venv/
+venv/
+env/
+ENV/
 
-# ── Hugging Face model cache ─────────────────────────────────────────────────
-.cache/
-~/.cache/huggingface/
+# Environment secrets — NEVER commit
+.env
+backend/.env
+.env.local
+.env.*.local
 
-# ── Streamlit ────────────────────────────────────────────────────────────────
-.streamlit/secrets.toml
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
 
-# ── macOS ────────────────────────────────────────────────────────────────────
-.DS_Store
-.AppleDouble
-.LSOverride
+# Mypy / type checkers
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
 
-# ── IDE ──────────────────────────────────────────────────────────────────────
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# ── Logs ────────────────────────────────────────────────────────────────────
-*.log
-logs/
-
-# ── Jupyter ──────────────────────────────────────────────────────────────────
+# Jupyter
 .ipynb_checkpoints/
 *.ipynb
+
+# ── Frontend ──────────────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/.env.local
+frontend/.env.*.local
+
+# ── ML / Model cache ──────────────────────────────────────────────────────────
+# HuggingFace BGE-M3 downloads (~2 GB — do not commit)
+*.bin
+*.safetensors
+model_cache/
+.cache/
+
+# ── Vector & Graph stores ─────────────────────────────────────────────────────
+qdrant_storage/
+qdrant_snapshots/
+
+# ── Sample / test data ────────────────────────────────────────────────────────
+# Uncomment to exclude test PDFs/DOCX from version control
+# backend/sample_data/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/settings.json
+*.swp
+*.swo
+*.orig
+
+# ── Streamlit (legacy) ────────────────────────────────────────────────────────
+.streamlit/secrets.toml
+
+# ── Logs & temp ───────────────────────────────────────────────────────────────
+*.log
+logs/
+tmp/
+temp/
