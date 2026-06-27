@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Network, Upload, GitBranch, MessageSquare, Zap, Trash2, RefreshCw } from 'lucide-react'
+import { Network, Upload, GitBranch, MessageSquare, Zap, Trash2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import clsx from 'clsx'
 
+import LandingPage from './components/LandingPage'
 import UploadZone from './components/UploadZone'
 import KnowledgeGraph from './components/KnowledgeGraph'
 import ElementsTable from './components/ElementsTable'
@@ -26,8 +27,12 @@ const INITIAL_STEPS: PipelineStep[] = [
 ]
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>('upload')
+  // ── Landing page state ───────────────────────────────────────────────────────
+  const [entered, setEntered] = useState(false)
   const [status, setStatus] = useState<AppStatus | null>(null)
+
+  // ── App state ────────────────────────────────────────────────────────────────
+  const [tab, setTab] = useState<Tab>('upload')
   const [elements, setElements] = useState<GraphNode[]>([])
   const [coverage, setCoverage] = useState<CoverageResult[]>([])
   const [steps, setSteps] = useState<PipelineStep[]>(INITIAL_STEPS)
@@ -35,29 +40,52 @@ export default function App() {
   const [summary, setSummary] = useState<PipelineSummary | null>(null)
   const [graphRefresh, setGraphRefresh] = useState(0)
   const [resetConfirm, setResetConfirm] = useState(false)
+  const [preloading, setPreloading] = useState(false)
 
-  // Load status on mount
+  // ── Fetch status on mount (powers the landing page) ──────────────────────────
   useEffect(() => {
     fetchStatus()
-      .then(s => {
-        setStatus(s)
-        if (s.has_data) {
-          loadExistingData()
-        }
-      })
-      .catch(console.error)
+      .then(s => setStatus(s))
+      .catch(() => setStatus({ has_data: false, nodes: 0, edges: 0, type_counts: {} }))
   }, [])
 
+  // ── Preload existing data — splits errors so one failure doesn't kill both ───
   const loadExistingData = useCallback(async () => {
+    setPreloading(true)
+    let loaded = false
+
+    // Elements
     try {
-      const [elems, cov] = await Promise.all([fetchElements(), fetchCoverage()])
+      const elems = await fetchElements()
       setElements(elems)
+      if (elems.length > 0) loaded = true
+    } catch (e) {
+      console.warn('Could not load elements:', e)
+    }
+
+    // Coverage
+    try {
+      const cov = await fetchCoverage()
       setCoverage(cov)
     } catch (e) {
-      console.error('Failed to load existing data', e)
+      console.warn('Could not load coverage:', e)
     }
+
+    // Trigger graph component to fetch its own data
+    if (loaded) setGraphRefresh(n => n + 1)
+    setPreloading(false)
   }, [])
 
+  // ── Called from landing page CTA ─────────────────────────────────────────────
+  const handleEnter = useCallback((hasData: boolean) => {
+    setEntered(true)
+    if (hasData) {
+      setTab('graph')  // jump straight to graph when resuming
+      loadExistingData()
+    }
+  }, [loadExistingData])
+
+  // ── SSE event handler ─────────────────────────────────────────────────────────
   const handleSSEEvent = useCallback((evt: SSEEvent) => {
     if (evt.type === 'pipeline_complete') {
       setSummary(evt.summary)
@@ -105,13 +133,24 @@ export default function App() {
     setCoverage([])
     setSummary(null)
     setSteps(INITIAL_STEPS)
-    setStatus(null)
+    setStatus({ has_data: false, nodes: 0, edges: 0, type_counts: {} })
     setGraphRefresh(n => n + 1)
+    setTab('upload')
     fetchStatus().then(setStatus).catch(console.error)
   }
 
   const hasData = status?.has_data || elements.length > 0
 
+  // ── Landing page ─────────────────────────────────────────────────────────────
+  if (!entered) {
+    return (
+      <AnimatePresence>
+        <LandingPage status={status} onEnter={handleEnter} />
+      </AnimatePresence>
+    )
+  }
+
+  // ── Main app ─────────────────────────────────────────────────────────────────
   const tabs: { id: Tab; label: string; icon: React.ReactNode; disabled?: boolean }[] = [
     { id: 'upload',       label: 'Upload',        icon: <Upload size={14} /> },
     { id: 'elements',     label: 'Elements',      icon: <Zap size={14} />,        disabled: !hasData },
@@ -120,18 +159,33 @@ export default function App() {
   ]
 
   return (
-    <div className="flex flex-col h-screen bg-bg overflow-hidden">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.3 }}
+      className="flex flex-col h-screen bg-bg overflow-hidden"
+    >
       {/* ── Header ─────────────────────────────────────────────────── */}
       <header className="flex items-center justify-between px-6 py-3 border-b border-border bg-surface shrink-0">
-        <div className="flex items-center gap-3">
+        <button
+          className="flex items-center gap-3 hover:opacity-80 transition-opacity"
+          onClick={() => setEntered(false)}
+          title="Back to home"
+        >
           <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
             <Network size={14} className="text-white" />
           </div>
           <span className="font-semibold text-white tracking-tight">GraphRAG</span>
           <span className="text-muted text-xs font-mono">Procurement Intelligence</span>
-        </div>
+        </button>
 
         <div className="flex items-center gap-2">
+          {preloading && (
+            <span className="text-xs text-muted font-mono flex items-center gap-1.5 mr-2">
+              <span className="w-3 h-3 border border-muted/30 border-t-muted rounded-full animate-spin inline-block" />
+              Loading…
+            </span>
+          )}
           {status && (
             <div className="flex items-center gap-3 mr-3">
               <Stat label="Nodes" value={status.nodes} />
@@ -231,7 +285,7 @@ export default function App() {
 
       {/* ── Floating chat ───────────────────────────────────────────── */}
       <ChatWindow disabled={!hasData} />
-    </div>
+    </motion.div>
   )
 }
 
