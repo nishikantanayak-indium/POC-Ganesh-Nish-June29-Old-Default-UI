@@ -84,35 +84,37 @@ All nodes land in **Neo4j**, scoped to the workspace. Typed edges (`COVERS`, `PA
 | **PostgreSQL** | One row per workspace — metadata only |
 | **Neo4j** | Composite unique constraint `(id, workspace_id) IS UNIQUE`; all queries filter by `workspace_id` |
 | **Qdrant** | Separate collection per workspace: `ws_{workspace_id}` |
-| **Pipeline** | Per-workspace coordinator and write lock — concurrent runs in the same workspace share one cross-doc extraction batch; different workspaces run fully in parallel |
+| **Pipeline** | Per-workspace coordinator and write lock — concurrent runs in the same workspace share one cross-doc extraction batch; different workspaces run fully in parallel. Pipeline state persists across workspace navigation (workspace-scoped Zustand store). |
 
 ### Pipeline — five steps (SSE streaming)
 
 ```
 1  Parse          PDF/DOCX → text pages
                   ┌ Digital PDF  → PyMuPDF native text extraction
-                  └ Scanned PDF  → PyMuPDF render at 200 DPI → Tesseract OCR
+                  └ Scanned PDF  → PyMuPDF render at 150 DPI grayscale → Tesseract OCR
+                    Per-page OCR progress streams live to the UI
                   Pages with >40% non-ASCII are dropped (garbled OCR filter)
                   SHA-256 dedup skips already-ingested files
 
 2  Extract (LLM)  Section-aware chunking — section headers detected per page
                   Each chunk prefixed [Section | Page N] for structural context
-                  GPT-4o function calling → AtomicElement objects
+                  GPT-4o function calling (temperature=0) → AtomicElement objects
                   (Requirement / Clause / Risk / Mitigation / LD)
-                  IDs are doc-scoped: RFP1_REQ_001, CONT_CL_001
+                  IDs are doc-scoped: RFPA_REQ_001, CONT_CL_001
 
 3  Build Graph    Coordinator pattern — concurrent pipeline runs share a single
                   combined cross-doc LLM call (6 s quiescence window)
+                  Elements sorted by ID before relationship extraction (deterministic)
                   Relationship types: COVERS / PARTIALLY_COVERS /
                     INTRODUCES_RISK / MITIGATED_BY / LINKED_TO_LD / CONTRADICTS
-                  Written to Neo4j with Cypher MERGE (idempotent, workspace-scoped)
+                  Direction enforced post-LLM (auto-flip guard for all types)
+                  Semantic relationships: clear-and-rewrite each run (no stale accumulation)
 
 4  Index Vectors  BGE-M3 embeddings → workspace Qdrant collection
                   Payload: section, page_number — enables section-scoped search
 
-5  Coverage       Re-syncs all cross-doc relationships across the workspace first
-                  (ensures consistency whether files were ingested together or separately)
-                  Graph traversal per Requirement → Covered / Partial / Not Covered
+5  Coverage       Graph traversal per Requirement → Covered / Partial / Not Covered
+                  All cross-doc relationships already written in Step 3 — no re-extraction
 ```
 
 ### Tech stack
@@ -126,7 +128,7 @@ All nodes land in **Neo4j**, scoped to the workspace. Typed edges (`COVERS`, `PA
 | Vector store | Qdrant (per-workspace collections) |
 | Embeddings | BAAI/bge-m3 (sentence-transformers, 1024-dim) |
 | Workspace metadata | PostgreSQL 16 (psycopg2) |
-| OCR | Tesseract 5.x + pytesseract + PyMuPDF rendering (scanned PDF fallback) |
+| OCR | Tesseract 5.x + pytesseract + PyMuPDF rendering at 150 DPI grayscale (scanned PDF fallback, per-page live progress) |
 
 ---
 
@@ -354,7 +356,8 @@ GraphRAG POC/
 │       ├── index.css               ← Tailwind + dark/light theme CSS custom properties
 │       │                             Border color overrides for Tailwind v3 CSS-var issue
 │       ├── api/client.ts           ← All fetch wrappers + SSE reader; all take workspaceId
-│       ├── store/pipelineStore.ts  ← Zustand store: jobs[], cleared on workspace change
+│       ├── store/pipelineStore.ts  ← Zustand: byWorkspace map — workspace-scoped jobs, persists across navigation
+  ├── store/globalToastStore.ts ← Cross-workspace pipeline completion toasts
 │       ├── theme/ThemeContext.tsx  ← Dark/light theme provider
 │       ├── pages/
 │       │   ├── WorkspacesPage.tsx  ← / — workspace grid, create, delete
@@ -403,9 +406,9 @@ Drop PDF or DOCX files. Filename keywords control document-type detection:
 | `risk`, `rmc`, `register` | Risk Sheet → extracts `Risk` + `Mitigation` |
 | `contract`, `offer`, `agreement` | Contract → extracts `Clause` + `LD` |
 
-Click **Run Pipeline**. Five steps stream live via SSE. Re-uploading the same file is safe — SHA-256 dedup skips it.
+Click **Run Pipeline**. Five steps stream live via SSE with verbose per-chunk and per-page OCR logs. Re-uploading the same file is safe — SHA-256 dedup skips it.
 
-The right column shows a **step stepper**, live activity log, and **Run History** (all past pipeline runs in the current session). Navigating to a new workspace clears the run history automatically.
+The right column shows a **step stepper**, live activity log, and **Run History** (all past pipeline runs per workspace). Pipeline state is workspace-scoped — navigating away and back preserves the run history and status. If a pipeline completes while you are in a different workspace, a **global toast notification** appears with a link to navigate back.
 
 #### Elements tab
 
@@ -498,9 +501,10 @@ RETURN req.id, req.text, req.section
 
 ### Coverage shows "Not Covered" for everything
 
-1. Check backend logs for cross-doc relationship count. If 0, check `CONFIDENCE_THRESHOLD`.
-2. Wipe the workspace (Wipe button), then re-upload all documents together in one pipeline run.
-3. Lower `CONFIDENCE_THRESHOLD=0.4` in `.env` and restart the API.
+1. Check backend logs — look for `Auto-flipped` messages indicating direction was corrected.
+2. Wipe the workspace (Wipe button), then re-upload all documents in one pipeline run.
+3. Verify document filenames contain the right keywords (`rfp`, `contract`, `risk`) so type detection works correctly.
+4. Lower `CONFIDENCE_THRESHOLD=0.4` in `.env` and restart the API if relationships exist but scores are low.
 
 ### "Could not initialize PostgreSQL" on startup
 
@@ -542,7 +546,7 @@ Document type is inferred from the filename. Rename the RFP to include `rfp` (e.
 
 ### Cross-doc sidebar shows 0 relationships
 
-Run the pipeline again — relationships may not have been extracted on the initial ingestion (coordinator silent failure). The coverage step at Step 5 now re-syncs them, but you can also wipe and re-ingest.
+Wipe the workspace and re-ingest all documents together in one run. Relationships are extracted once in Step 3 by the coordinator — uploading all files together ensures the LLM sees the full combined element set when inferring cross-document links.
 
 ### Port conflicts
 
