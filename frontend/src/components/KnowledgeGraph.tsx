@@ -13,6 +13,7 @@ import { RefreshCw, Search, Eye, EyeOff, Zap, Grid, GitBranch, X, ChevronDown, C
 
 import { fetchGraphData, fetchSubgraph, fetchCrossDocRelationships } from '../api/client'
 import type { GraphNode, GraphEdge, CrossDocRelationship } from '../types'
+import { useTheme } from '../theme/ThemeContext'
 
 // ── Type config ───────────────────────────────────────────────────────────────
 const TYPE_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
@@ -402,14 +403,20 @@ function CrossDocSidebar({
 // ── Clickable minimap (must be inside ReactFlow context to use useReactFlow) ──
 function ClickableMiniMap() {
   const { setCenter } = useReactFlow()
+  const { theme } = useTheme()
+  const dark = theme === 'dark'
   return (
     <MiniMap
       pannable
       zoomable
       onClick={(_, pos) => setCenter(pos.x, pos.y, { zoom: 1.4, duration: 500 })}
       nodeColor={n => TYPE_CONFIG[(n.data as Record<string, unknown>).type as string]?.color ?? '#334155'}
-      maskColor="#09090fcc"
-      style={{ background: '#111118', border: '1px solid #252535', cursor: 'pointer' }}
+      maskColor={dark ? 'rgba(9,9,15,0.82)' : 'rgba(200,204,220,0.72)'}
+      style={{
+        background: dark ? '#111118' : '#ffffff',
+        border: `1px solid ${dark ? '#252535' : '#d8ddf0'}`,
+        cursor: 'pointer',
+      }}
     />
   )
 }
