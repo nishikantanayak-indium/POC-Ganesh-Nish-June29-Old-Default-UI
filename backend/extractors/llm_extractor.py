@@ -282,6 +282,7 @@ class LLMExtractor(IExtractor):
             try:
                 resp = self.client.chat.completions.create(
                     model=settings.llm_model,
+                    temperature=0,
                     messages=[
                         {"role": "system", "content": system},
                         {"role": "user", "content": f"Extract elements from:\n\n{chunk_text}"},
@@ -371,51 +372,117 @@ class LLMExtractor(IExtractor):
         if not elements:
             return []
 
-        elem_ids = {e.id for e in elements}
-        elem_list = "\n".join(
-            f"{e.id} | {e.type.value} | {e.text[:120]} ({e.source})" for e in elements
-        )
+        # Sort by ID so the LLM always sees the same input order regardless of
+        # how Neo4j returns elements (traversal order varies between workspaces).
+        ordered = sorted(elements, key=lambda e: e.id)
+        elem_ids = {e.id for e in ordered}
+
+        # Group by document so the LLM sees all elements from each document together —
+        # this dramatically improves COVERS/PARTIALLY_COVERS detection between documents.
+        by_doc: dict[str, list[AtomicElement]] = {}
+        for e in ordered:
+            by_doc.setdefault(e.document_id, []).append(e)
+
+        sections: list[str] = []
+        for doc_id, doc_elems in sorted(by_doc.items()):
+            header = f"=== Document: {doc_elems[0].source.split(' — ')[0] if doc_elems else doc_id} ==="
+            lines = [header] + [
+                f"{e.id} | {e.type.value} | {e.text[:120]} ({e.source})"
+                for e in doc_elems
+            ]
+            sections.append("\n".join(lines))
+        elem_list = "\n\n".join(sections)
+
         system = (
-            "You are a procurement knowledge graph analyst. Infer relationships between elements.\n\n"
-            "Relationship types:\n"
-            "- COVERS: Contract Clause fully addresses an RFP Requirement (same topic, same/better SLA)\n"
-            "- PARTIALLY_COVERS: Clause addresses topic but with lower SLA or missing aspects\n"
-            "- INTRODUCES_RISK: Requirement creates this Risk if breached or not met\n"
-            "- MITIGATED_BY: Risk is addressed/reduced by this Mitigation\n"
-            "- LINKED_TO_LD: Risk or Requirement has this LD as financial consequence\n"
-            "- CONTRADICTS: Two Clauses directly conflict\n\n"
-            "Rules: only confidence >= 0.6. Both IDs must exist in the provided list."
+            "You are a procurement knowledge graph analyst. "
+            "Infer ALL applicable relationships between the elements below.\n\n"
+            "Relationship types with MANDATORY source→target direction "
+            "(never reverse these):\n\n"
+            "1. COVERS           source=Clause        → target=Requirement\n"
+            "   The Contract Clause fully satisfies the Requirement (same/better SLA or terms).\n\n"
+            "2. PARTIALLY_COVERS source=Clause        → target=Requirement\n"
+            "   The Clause addresses the same topic but with weaker SLA or missing aspects.\n\n"
+            "3. INTRODUCES_RISK  source=Requirement   → target=Risk\n"
+            "   If this Requirement is not met or breached, it creates this Risk.\n\n"
+            "4. MITIGATED_BY     source=Risk          → target=Mitigation\n"
+            "   This Mitigation action reduces or controls the Risk.\n\n"
+            "5. LINKED_TO_LD     source=Risk or Requirement → target=LD\n"
+            "   This LD (Liquidated Damages clause) is the financial consequence.\n\n"
+            "6. CONTRADICTS      source=Clause        → target=Clause\n"
+            "   The two Clauses directly conflict with each other.\n\n"
+            "Scan ALL pairs across documents AND within the same document. "
+            "Only add a relationship if the semantic connection is genuinely present in the "
+            "element texts — do NOT invent relationships to fill gaps.\n\n"
+            "Rules: confidence >= 0.6 only. Both IDs must exist in the provided list."
         )
 
         try:
             resp = self.client.chat.completions.create(
                 model=settings.llm_model,
+                temperature=0,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": f"Infer relationships for:\n\n{elem_list}"},
                 ],
                 tools=[RELATIONSHIP_TOOL],
                 tool_choice={"type": "function", "function": {"name": "create_relationships"}},
-                max_tokens=4000,
+                max_tokens=8000,
             )
             tc = resp.choices[0].message.tool_calls
             if not tc:
                 return []
 
+            # Build a quick type lookup so we can enforce direction constraints below.
+            elem_type_map = {e.id: e.type for e in ordered}
+
             data = json.loads(tc[0].function.arguments)
             rels: list[Relationship] = []
             for r in data.get("relationships", []):
-                if r["source_id"] not in elem_ids or r["target_id"] not in elem_ids:
+                src_id, tgt_id = r["source_id"], r["target_id"]
+                if src_id not in elem_ids or tgt_id not in elem_ids:
                     continue
                 if float(r.get("confidence", 0)) < settings.confidence_threshold:
                     continue
                 rel_type = self._rel_str_to_enum(r["type"])
                 if rel_type is None:
                     continue
+
+                # Enforce direction for all relationship types.
+                # If the LLM reverses any of these, auto-flip rather than silently losing data.
+                src_t = elem_type_map.get(src_id)
+                tgt_t = elem_type_map.get(tgt_id)
+                should_flip = False
+
+                if rel_type in (RelationshipType.COVERS, RelationshipType.PARTIALLY_COVERS):
+                    # Clause → Requirement
+                    if src_t == ElementType.REQUIREMENT and tgt_t == ElementType.CLAUSE:
+                        should_flip = True
+                elif rel_type == RelationshipType.INTRODUCES_RISK:
+                    # Requirement → Risk
+                    if src_t == ElementType.RISK and tgt_t == ElementType.REQUIREMENT:
+                        should_flip = True
+                elif rel_type == RelationshipType.MITIGATED_BY:
+                    # Risk → Mitigation
+                    if src_t == ElementType.MITIGATION and tgt_t == ElementType.RISK:
+                        should_flip = True
+                elif rel_type == RelationshipType.LINKED_TO_LD:
+                    # Risk/Requirement → LD
+                    if src_t == ElementType.LD and tgt_t in (
+                        ElementType.RISK, ElementType.REQUIREMENT
+                    ):
+                        should_flip = True
+
+                if should_flip:
+                    src_id, tgt_id = tgt_id, src_id
+                    logger.debug(
+                        "Auto-flipped %s %s→%s to correct direction",
+                        rel_type.value, r["source_id"], r["target_id"],
+                    )
+
                 rels.append(
                     Relationship(
-                        source_id=r["source_id"],
-                        target_id=r["target_id"],
+                        source_id=src_id,
+                        target_id=tgt_id,
                         type=rel_type,
                         confidence=float(r["confidence"]),
                         evidence=r.get("evidence", ""),

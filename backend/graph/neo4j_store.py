@@ -135,6 +135,21 @@ class Neo4jGraphStore(IGraphStore):
                 f"Failed to clear document '{document_id}' in workspace '{workspace_id}': {exc}"
             ) from exc
 
+    def clear_non_contains_relationships(self, workspace_id: str) -> None:
+        """Delete all semantic relationships (everything except CONTAINS) for a workspace.
+        Called before re-writing a fresh coordinator batch so stale rels don't accumulate."""
+        try:
+            with self._driver.session(database=self._db) as s:
+                s.run(
+                    "MATCH (a:Element {workspace_id: $wid})-[r]->(b:Element {workspace_id: $wid}) "
+                    "WHERE type(r) <> 'CONTAINS' DELETE r",
+                    wid=workspace_id,
+                )
+        except Exception as exc:
+            raise GraphStoreError(
+                f"Failed to clear relationships for workspace '{workspace_id}': {exc}"
+            ) from exc
+
     def clear(self) -> None:
         """Delete ALL nodes across ALL workspaces — admin use only."""
         try:

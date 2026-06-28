@@ -379,32 +379,6 @@ async def _stream_pipeline(
         all_ws_elements = await asyncio.to_thread(
             graph_svc.store.get_all_elements, workspace_id
         )
-        doc_ids = {e.document_id for e in all_ws_elements if e.document_id}
-
-        if len(doc_ids) > 1:
-            yield _sse({"type": "step_progress", "step": "coverage",
-                        "message": f"Syncing cross-document relationships across {len(doc_ids)} documents…",
-                        "current": 0, "total": 0})
-            await asyncio.sleep(0)
-            try:
-                cross_rels = await asyncio.to_thread(
-                    doc_svc.extract_cross_document_relationships, all_ws_elements
-                )
-                yield _sse({"type": "step_progress", "step": "coverage",
-                            "message": f"Re-synced {len(cross_rels)} cross-doc relationships — persisting…",
-                            "current": 0, "total": 0})
-                await asyncio.sleep(0)
-                cov_write_lock = _get_write_lock(workspace_id)
-                async with cov_write_lock:
-                    for rel in cross_rels:
-                        try:
-                            await asyncio.to_thread(
-                                graph_svc.store.add_relationship, rel, workspace_id
-                            )
-                        except Exception:
-                            pass
-            except Exception:
-                pass  # Non-fatal
 
         req_count = sum(1 for e in all_ws_elements if e.type.value == "Requirement")
         yield _sse({"type": "step_progress", "step": "coverage",

@@ -28,8 +28,8 @@ function accentFor(type: string): string {
 function ElementCard({ elem }: { elem: ChainElement }) {
   const [expanded, setExpanded] = useState(false)
   const accent = accentFor(elem.type)
-  const preview = elem.text.slice(0, 100)
-  const hasMore = elem.text.length > 100
+  const PREVIEW = 160
+  const hasMore = elem.text.length > PREVIEW
 
   return (
     <motion.div
@@ -37,10 +37,9 @@ function ElementCard({ elem }: { elem: ChainElement }) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.18 }}
       style={{ borderLeft: `3px solid ${accent}` }}
-      className="bg-card rounded-lg p-3 mb-2 border border-border cursor-pointer hover:border-white/20 transition-colors"
-      onClick={() => hasMore && setExpanded(v => !v)}
+      className="bg-card rounded-lg p-3 mb-2 border border-border transition-colors"
     >
-      {/* Row 1: type pill + id + relationship badge + inter/intra */}
+      {/* Row 1: type pill + id */}
       <div className="flex items-center gap-2 flex-wrap mb-1.5">
         <span
           style={{ color: accent, borderColor: `${accent}44`, background: `${accent}18` }}
@@ -49,13 +48,10 @@ function ElementCard({ elem }: { elem: ChainElement }) {
           {elem.type}
         </span>
         <span className="font-mono text-[11px] text-foreground font-semibold">{elem.id}</span>
-
         <span className="ml-auto flex items-center gap-1.5">
-          {/* Relationship badge */}
           <span className="text-[9px] font-mono text-slate-400 bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded">
             {elem.relationship.replace(/_/g, ' ')}
           </span>
-          {/* Inter/Intra badge */}
           {elem.is_inter_document ? (
             <span className="text-[9px] font-bold text-blue-300 bg-blue-900/40 border border-blue-700/50 px-1.5 py-0.5 rounded tracking-wide">
               ↔ INTER
@@ -68,14 +64,21 @@ function ElementCard({ elem }: { elem: ChainElement }) {
         </span>
       </div>
 
-      {/* Row 2: text preview */}
-      <p className="text-[11px] text-slate-300 leading-relaxed">
-        {expanded ? elem.text : preview}
-        {!expanded && hasMore && <span className="text-slate-500">… <span className="text-primary text-[10px]">show more</span></span>}
+      {/* Row 2: full / preview text */}
+      <p className="text-[11px] text-slate-300 leading-relaxed whitespace-pre-wrap break-words">
+        {expanded || !hasMore ? elem.text : elem.text.slice(0, PREVIEW) + '…'}
       </p>
+      {hasMore && (
+        <button
+          onClick={() => setExpanded(v => !v)}
+          className="mt-1 text-[10px] text-primary hover:underline font-medium"
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
 
       {/* Row 3: source */}
-      <p className="text-[9px] text-slate-500 font-mono mt-1.5 truncate">{elem.source}</p>
+      <p className="text-[9px] text-slate-500 font-mono mt-1.5 break-all">{elem.source}</p>
     </motion.div>
   )
 }
@@ -221,7 +224,7 @@ export default function TraceabilityView({ workspaceId, coverage }: { workspaceI
                       <ChevronRight size={12} className={clsx('text-muted transition-transform', isSelected && 'rotate-90')} />
                     </span>
                   </div>
-                  <p className="text-xs text-muted mt-0.5 line-clamp-2">{r.requirement_text}</p>
+                  <p className="text-xs text-muted mt-0.5 leading-relaxed">{r.requirement_text}</p>
                   <div className="flex items-center gap-2 mt-1.5">
                     <span style={{ color: cfg.color, borderColor: `${cfg.color}44` }}
                       className="text-xs font-medium px-2 py-0.5 rounded-full border bg-transparent">
@@ -254,12 +257,16 @@ export default function TraceabilityView({ workspaceId, coverage }: { workspaceI
         ) : chain ? (
           <>
             {/* Header bar */}
-            <div className="shrink-0 px-4 py-3 border-b border-border bg-surface flex items-center gap-3 flex-wrap">
-              <span className="font-mono text-sm font-bold text-foreground">{chain.requirement.id}</span>
-              <span className="text-xs text-slate-400 truncate max-w-xs">{chain.requirement.text.slice(0, 80)}{chain.requirement.text.length > 80 ? '…' : ''}</span>
-              <span className="ml-auto text-[10px] font-mono text-slate-500 bg-slate-800 border border-slate-700 px-2 py-0.5 rounded">
-                {chain.requirement.source}
-              </span>
+            <div className="shrink-0 px-4 py-3 border-b border-border bg-surface">
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="font-mono text-sm font-bold text-foreground">{chain.requirement.id}</span>
+                <span className="ml-auto text-[10px] font-mono text-slate-500 bg-slate-800 border border-slate-700 px-2 py-0.5 rounded shrink-0">
+                  {chain.requirement.source}
+                </span>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap break-words">
+                {chain.requirement.text}
+              </p>
             </div>
 
             {/* 4 columns */}

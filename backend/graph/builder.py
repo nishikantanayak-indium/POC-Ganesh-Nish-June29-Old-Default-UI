@@ -75,6 +75,12 @@ class GraphBuilder:
                 workspace_id,
             )
 
+        # Clear all semantic (non-CONTAINS) relationships before writing the fresh coordinator
+        # batch. This prevents stale rels from previous incremental runs from accumulating —
+        # e.g. a COVERS rel found in run 1 that the LLM no longer finds in run 2 would otherwise
+        # silently persist and inflate coverage metrics.
+        self.store.clear_non_contains_relationships(workspace_id)
+
         for rel in relationships:
             self.store.add_relationship(rel, workspace_id)
 
