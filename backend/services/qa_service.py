@@ -56,8 +56,10 @@ logger = logging.getLogger(__name__)
 _SYSTEM_PROMPT = (
     "You are a procurement knowledge graph analyst. "
     "Answer based only on the provided graph evidence. "
-    "Always cite element IDs and source pages. "
-    "Be concise and precise."
+    "Write a concise, direct answer in plain prose — 2 to 4 sentences maximum unless a list is genuinely clearer. "
+    "Do NOT include element IDs, source document names, or page references in your answer text. "
+    "The user sees the source evidence cards separately, so focus entirely on the substance: "
+    "what the data says, what the obligation or risk is, and what the implication is."
 )
 
 
@@ -304,7 +306,7 @@ class QAService:
                         ),
                     },
                 ],
-                max_tokens=800,
+                max_tokens=400,
             )
             return response.choices[0].message.content or ""
         except Exception as exc:

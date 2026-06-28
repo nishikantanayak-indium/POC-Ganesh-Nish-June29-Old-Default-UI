@@ -1,4 +1,4 @@
-import type { AppStatus, CoverageResult, GraphData, TraceabilityChain, GraphNode } from '../types'
+import type { AppStatus, CoverageResult, GraphData, TraceabilityChain, GraphNode, EvidenceItem } from '../types'
 
 const BASE = ''  // vite proxy forwards /api → localhost:8000
 
@@ -42,7 +42,7 @@ export async function fetchChain(reqId: string): Promise<TraceabilityChain> {
   return r.json()
 }
 
-export async function askQuestion(question: string): Promise<{ answer: string; evidence: unknown[]; query_type: string }> {
+export async function askQuestion(question: string): Promise<{ answer: string; evidence: EvidenceItem[]; query_type: string }> {
   const r = await fetch(`${BASE}/api/chat/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

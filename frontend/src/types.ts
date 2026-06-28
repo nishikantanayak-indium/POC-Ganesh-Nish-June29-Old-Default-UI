@@ -85,11 +85,25 @@ export interface PipelineSummary {
   elapsed: number
 }
 
+export interface EvidenceItem {
+  id?: string
+  type?: string
+  text?: string
+  source?: string
+  status?: string
+  requirement?: string
+  risk_id?: string
+  risk_text?: string
+  graphiti_fact?: string
+  uuid?: string
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
   queryType?: string
+  evidence?: EvidenceItem[]
   timestamp: number
 }
 
