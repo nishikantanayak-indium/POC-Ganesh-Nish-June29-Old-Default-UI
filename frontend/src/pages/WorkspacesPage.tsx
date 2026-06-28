@@ -202,7 +202,10 @@ export default function WorkspacesPage() {
     <div className="min-h-screen bg-bg">
       {/* Header */}
       <header className="border-b border-border bg-surface px-8 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+        <button
+          onClick={() => navigate('/')}
+          className="flex items-center gap-3 hover:opacity-80 transition-opacity"
+        >
           <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center">
             <Network size={15} className="text-white" />
           </div>
@@ -210,7 +213,7 @@ export default function WorkspacesPage() {
             <span className="font-bold text-white text-base tracking-tight">GraphRAG</span>
             <span className="ml-2 text-muted text-xs font-mono">Procurement Intelligence</span>
           </div>
-        </div>
+        </button>
         <button
           onClick={() => setShowCreate(true)}
           className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary/90 transition-colors shadow-lg shadow-primary/20"

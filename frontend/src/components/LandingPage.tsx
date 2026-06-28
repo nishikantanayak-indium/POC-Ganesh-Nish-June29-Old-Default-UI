@@ -1,11 +1,6 @@
 import { motion } from 'framer-motion'
-import { Network, GitBranch, MessageSquare, Zap, ArrowRight, Database } from 'lucide-react'
-import type { AppStatus } from '../types'
-
-interface Props {
-  status: AppStatus | null
-  onEnter: (hasData: boolean) => void
-}
+import { useNavigate } from 'react-router-dom'
+import { Network, GitBranch, MessageSquare, Zap, ArrowRight, FolderOpen } from 'lucide-react'
 
 const FEATURES = [
   {
@@ -30,8 +25,8 @@ const FEATURES = [
   },
 ]
 
-export default function LandingPage({ status, onEnter }: Props) {
-  const hasData = status?.has_data ?? false
+export default function LandingPage() {
+  const navigate = useNavigate()
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-bg px-6 relative overflow-hidden">
@@ -115,54 +110,24 @@ export default function LandingPage({ status, onEnter }: Props) {
           ))}
         </motion.div>
 
-        {/* CTA buttons */}
+        {/* CTA */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.45 }}
           className="flex flex-col items-center gap-3"
         >
-          {hasData ? (
-            <>
-              <button
-                onClick={() => onEnter(true)}
-                className="flex items-center gap-2.5 px-8 py-3.5 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-primary/90 transition-all shadow-lg shadow-primary/20 hover:shadow-primary/30 hover:scale-[1.02] active:scale-[0.99]"
-              >
-                <Database size={16} />
-                Resume Session
-                <ArrowRight size={15} />
-              </button>
-              <div className="flex items-center gap-3 text-xs text-muted font-mono">
-                <span className="flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
-                  {status!.nodes} nodes
-                </span>
-                <span className="text-border">·</span>
-                <span>{status!.edges} edges</span>
-                {Object.entries(status!.type_counts ?? {})
-                  .filter(([k]) => k !== 'Document')
-                  .map(([k, v]) => (
-                    <span key={k} className="text-border">
-                      · {v} {k}
-                    </span>
-                  ))}
-              </div>
-              <button
-                onClick={() => onEnter(false)}
-                className="text-xs text-slate-600 hover:text-muted transition-colors"
-              >
-                Start fresh instead →
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={() => onEnter(false)}
-              className="flex items-center gap-2.5 px-8 py-3.5 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-primary/90 transition-all shadow-lg shadow-primary/20 hover:shadow-primary/30 hover:scale-[1.02] active:scale-[0.99]"
-            >
-              Launch App
-              <ArrowRight size={15} />
-            </button>
-          )}
+          <button
+            onClick={() => navigate('/workspaces')}
+            className="flex items-center gap-2.5 px-8 py-3.5 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-primary/90 transition-all shadow-lg shadow-primary/20 hover:shadow-primary/30 hover:scale-[1.02] active:scale-[0.99]"
+          >
+            <FolderOpen size={16} />
+            Open Workspaces
+            <ArrowRight size={15} />
+          </button>
+          <p className="text-xs text-slate-600 font-mono">
+            Create or continue an analysis workspace
+          </p>
         </motion.div>
 
         {/* Footer hint */}

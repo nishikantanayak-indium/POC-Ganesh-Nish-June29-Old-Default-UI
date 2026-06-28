@@ -130,7 +130,7 @@ export default function WorkspacePage() {
       <header className="flex items-center justify-between px-6 py-3 border-b border-border bg-surface shrink-0">
         <div className="flex items-center gap-4">
           <button
-            onClick={() => navigate('/')}
+            onClick={() => navigate('/workspaces')}
             className="flex items-center gap-1.5 text-muted hover:text-white transition-colors text-xs font-medium"
           >
             <ArrowLeft size={13} />
