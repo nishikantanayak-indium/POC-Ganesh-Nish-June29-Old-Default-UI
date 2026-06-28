@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import {
   ReactFlow, Background, Controls, MiniMap,
-  useNodesState, useEdgesState,
+  useNodesState, useEdgesState, useReactFlow,
   Handle, Position,
   type Node, type Edge, MarkerType, BackgroundVariant,
   type NodeProps,
@@ -34,8 +34,8 @@ const EDGE_COLORS: Record<string, string> = {
   CONTAINS:         '#475569',
 }
 
-const NODE_W = 210
-const NODE_H = 90
+const NODE_W = 180
+const NODE_H = 72
 
 // ── Custom node ───────────────────────────────────────────────────────────────
 function ElementNode({ data }: NodeProps) {
@@ -44,47 +44,52 @@ function ElementNode({ data }: NodeProps) {
   return (
     <>
       <Handle type="target" position={Position.Left}
-        style={{ background: cfg.color, width: 8, height: 8, border: 'none' }} />
+        style={{ background: cfg.color, width: 7, height: 7, border: 'none' }} />
       <div style={{
         background: cfg.bg,
         border: `1.5px solid ${cfg.color}55`,
-        borderLeft: `4px solid ${cfg.color}`,
-        borderRadius: 10,
-        padding: '8px 12px',
+        borderLeft: `3px solid ${cfg.color}`,
+        borderRadius: 8,
+        padding: '6px 10px',
         width: NODE_W,
         minHeight: NODE_H,
         cursor: 'grab',
         userSelect: 'none',
         boxShadow: `0 0 0 1px ${cfg.color}11`,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
           <span style={{
-            fontSize: 9, fontWeight: 700, letterSpacing: 1,
+            fontSize: 9, fontWeight: 700, letterSpacing: 0.8,
             color: cfg.color, fontFamily: 'monospace',
-            background: `${cfg.color}20`, padding: '1px 6px', borderRadius: 4,
+            background: `${cfg.color}20`, padding: '1px 5px', borderRadius: 3,
+            flexShrink: 0,
           }}>
             {cfg.label}
           </span>
-          <span style={{ fontSize: 11, fontWeight: 600, color: '#f1f5f9', fontFamily: 'monospace' }}>
+          <span style={{
+            fontSize: 10, fontWeight: 600, color: '#e2e8f0', fontFamily: 'monospace',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
             {d.id as string}
           </span>
         </div>
         <p style={{
-          fontSize: 11, color: '#94a3b8', lineHeight: 1.45, margin: 0,
+          fontSize: 10, color: '#94a3b8', lineHeight: 1.4, margin: 0,
           overflow: 'hidden', display: '-webkit-box',
           WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
         }}>
-          {((d.text as string) ?? '').slice(0, 80)}
-          {((d.text as string) ?? '').length > 80 ? '…' : ''}
+          {((d.text as string) ?? '').slice(0, 70)}
+          {((d.text as string) ?? '').length > 70 ? '…' : ''}
         </p>
         {typeof d.source === 'string' && d.source && (
-          <p style={{ fontSize: 9, color: '#475569', marginTop: 5, fontFamily: 'monospace' }}>
+          <p style={{ fontSize: 9, color: '#475569', marginTop: 4, fontFamily: 'monospace',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {d.source}
           </p>
         )}
       </div>
       <Handle type="source" position={Position.Right}
-        style={{ background: cfg.color, width: 8, height: 8, border: 'none' }} />
+        style={{ background: cfg.color, width: 7, height: 7, border: 'none' }} />
     </>
   )
 }
@@ -115,10 +120,12 @@ function applyForceLayout(nodes: Node[], edges: Edge[]): Node[] {
     }))
 
   const sim = d3force.forceSimulation(simNodes)
-    .force('link', d3force.forceLink<SimNode, SimLink>(simLinks).distance(280).strength(0.6))
-    .force('charge', d3force.forceManyBody().strength(-600))
-    .force('collide', d3force.forceCollide(130))
+    .force('link', d3force.forceLink<SimNode, SimLink>(simLinks).distance(250).strength(0.65))
+    .force('charge', d3force.forceManyBody().strength(-520))
+    .force('collide', d3force.forceCollide(115))
     .force('center', d3force.forceCenter(0, 0))
+    .force('x', d3force.forceX(0).strength(0.03))
+    .force('y', d3force.forceY(0).strength(0.03))
     .stop()
 
   // Run synchronously for enough ticks to reach stable state
@@ -136,7 +143,7 @@ import dagre from 'dagre'
 function applyDagreLayout(nodes: Node[], edges: Edge[]): Node[] {
   const g = new dagre.graphlib.Graph()
   g.setDefaultEdgeLabel(() => ({}))
-  g.setGraph({ rankdir: 'LR', ranksep: 180, nodesep: 90, edgesep: 40 })
+  g.setGraph({ rankdir: 'LR', ranksep: 160, nodesep: 75, edgesep: 35 })
   nodes.forEach(n => g.setNode(n.id, { width: NODE_W, height: NODE_H }))
   edges.forEach(e => g.setEdge(e.source, e.target))
   dagre.layout(g)
@@ -392,6 +399,21 @@ function CrossDocSidebar({
   )
 }
 
+// ── Clickable minimap (must be inside ReactFlow context to use useReactFlow) ──
+function ClickableMiniMap() {
+  const { setCenter } = useReactFlow()
+  return (
+    <MiniMap
+      pannable
+      zoomable
+      onClick={(_, pos) => setCenter(pos.x, pos.y, { zoom: 1.4, duration: 500 })}
+      nodeColor={n => TYPE_CONFIG[(n.data as Record<string, unknown>).type as string]?.color ?? '#334155'}
+      maskColor="#09090fcc"
+      style={{ background: '#111118', border: '1px solid #252535', cursor: 'pointer' }}
+    />
+  )
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceId: string; refreshKey: number }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([])
@@ -504,24 +526,24 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
   return (
     <div className="h-full flex flex-col">
       {/* Toolbar */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-surface shrink-0 flex-wrap">
-        <div className="flex items-center gap-2 flex-wrap">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-surface shrink-0 flex-wrap">
+        <div className="flex items-center gap-1.5 flex-wrap">
           {Object.entries(typeCounts).map(([type, count]) => {
             const cfg = TYPE_CONFIG[type] ?? TYPE_CONFIG.Document
             return (
               <span key={type}
                 style={{ borderColor: `${cfg.color}55`, color: cfg.color }}
-                className="text-xs font-mono px-2 py-0.5 rounded-full border">
-                {type}: {count}
+                className="text-[10px] font-mono px-1.5 py-0.5 rounded-full border whitespace-nowrap">
+                {type.replace('Requirement', 'Req').replace('Mitigation', 'Mit')}: {count}
               </span>
             )
           })}
-          <span className="text-xs font-mono px-2 py-0.5 rounded-full border border-slate-600 text-slate-400">
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full border border-slate-600 text-slate-500 whitespace-nowrap">
             edges: {edges.length}
           </span>
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-1.5 flex-wrap justify-end">
           {/* Layout toggle */}
           <div className="flex rounded-lg border border-border overflow-hidden">
             <button
@@ -642,19 +664,15 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
           panOnScroll={false}
           selectNodesOnDrag={false}
           fitView
-          fitViewOptions={{ padding: 0.15 }}
-          minZoom={0.03}
+          fitViewOptions={{ padding: 0.12, minZoom: 0.3 }}
+          minZoom={0.05}
           maxZoom={3}
           proOptions={{ hideAttribution: true }}
           defaultEdgeOptions={{ type: 'smoothstep' }}
         >
           <Background variant={BackgroundVariant.Dots} gap={28} size={1} color="#1a1a2e" />
           <Controls showInteractive={false} />
-          <MiniMap
-            nodeColor={n => TYPE_CONFIG[(n.data as Record<string, unknown>).type as string]?.color ?? '#334155'}
-            maskColor="#09090fcc"
-            style={{ background: '#111118', border: '1px solid #252535' }}
-          />
+          <ClickableMiniMap />
         </ReactFlow>
 
         {/* Node detail panel */}
