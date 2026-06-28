@@ -77,6 +77,7 @@ export default function WorkspacePage() {
   }, [workspaceId])
 
   useEffect(() => {
+    usePipelineStore.getState().clearJobs()
     loadData()
   }, [workspaceId]) // eslint-disable-line react-hooks/exhaustive-deps
 

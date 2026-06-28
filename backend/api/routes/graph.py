@@ -60,6 +60,18 @@ async def get_subgraph(workspace_id: str, node_id: str) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
+@router.get("/cross-doc-relationships")
+async def get_cross_doc_relationships(workspace_id: str) -> dict:
+    gs = get_graph_service(workspace_id)
+    try:
+        rows = await asyncio.to_thread(
+            gs.store.get_cross_document_relationships, workspace_id
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"relationships": rows, "total": len(rows)}
+
+
 @router.get("/stats")
 async def get_stats(workspace_id: str) -> dict:
     gs = get_graph_service(workspace_id)

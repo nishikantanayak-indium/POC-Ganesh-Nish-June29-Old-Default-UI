@@ -159,6 +159,30 @@ class Neo4jGraphStore(IGraphStore):
         except Exception as exc:
             raise GraphStoreError(f"Failed to fetch element '{element_id}': {exc}") from exc
 
+    def get_element_doc_id(self, element_id: str, workspace_id: str) -> str:
+        """Return the document ID that CONTAINS this element (via explicit edge).
+        Falls back to the element's stored document_id property if no CONTAINS edge exists."""
+        try:
+            with self._driver.session(database=self._db) as s:
+                result = s.run(
+                    "MATCH (doc:Element {type: 'Document', workspace_id: $wid})"
+                    "-[:CONTAINS]->(e:Element {id: $id, workspace_id: $wid}) "
+                    "RETURN doc.id AS doc_id",
+                    id=element_id, wid=workspace_id,
+                )
+                record = result.single()
+                if record and record["doc_id"]:
+                    return record["doc_id"]
+                # Fallback: read the property directly
+                result2 = s.run(
+                    "MATCH (e:Element {id: $id, workspace_id: $wid}) RETURN e.document_id AS doc_id",
+                    id=element_id, wid=workspace_id,
+                )
+                rec2 = result2.single()
+                return (rec2["doc_id"] or "") if rec2 else ""
+        except Exception:
+            return ""
+
     def get_all_elements(self, workspace_id: str) -> list[AtomicElement]:
         try:
             with self._driver.session(database=self._db) as s:
@@ -276,6 +300,28 @@ class Neo4jGraphStore(IGraphStore):
         except Exception:
             return {}
 
+    def get_cross_document_relationships(self, workspace_id: str) -> list[dict]:
+        """Return all non-CONTAINS edges that cross document boundaries."""
+        query = (
+            "MATCH (a:Element {workspace_id: $wid})-[r]->(b:Element {workspace_id: $wid}) "
+            "WHERE type(r) <> 'CONTAINS' "
+            "  AND a.document_id IS NOT NULL AND b.document_id IS NOT NULL "
+            "  AND a.document_id <> '' AND b.document_id <> '' "
+            "  AND a.document_id <> b.document_id "
+            "RETURN "
+            "  a.id AS src_id, a.type AS src_type, a.text AS src_text, "
+            "  a.source AS src_source, a.document_id AS src_doc, "
+            "  type(r) AS rtype, coalesce(r.confidence, 1.0) AS conf, "
+            "  coalesce(r.evidence, '') AS ev, "
+            "  b.id AS tgt_id, b.type AS tgt_type, b.text AS tgt_text, "
+            "  b.source AS tgt_source, b.document_id AS tgt_doc"
+        )
+        try:
+            with self._driver.session(database=self._db) as s:
+                return [dict(r) for r in s.run(query, wid=workspace_id)]
+        except Exception as exc:
+            raise GraphStoreError(f"Failed to fetch cross-document relationships: {exc}") from exc
+
     def get_document_hashes(self, workspace_id: str) -> dict[str, str]:
         try:
             with self._driver.session(database=self._db) as s:
@@ -353,7 +399,7 @@ class Neo4jGraphStore(IGraphStore):
             type=elem_type,
             text=props.get("text", ""),
             source=props.get("source", ""),
-            document_id=props.get("document_id", ""),
+            document_id=props.get("document_id") or "",
             confidence=float(props.get("confidence", 1.0)),
             metadata=metadata,
         )

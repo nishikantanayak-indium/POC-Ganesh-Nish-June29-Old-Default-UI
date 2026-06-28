@@ -32,6 +32,12 @@ export interface GraphData {
   edges: GraphEdge[]
 }
 
+export interface CrossDocRelationship {
+  src_id: string; src_type: string; src_text: string; src_source: string; src_doc: string
+  rtype: string; conf: number; ev: string
+  tgt_id: string; tgt_type: string; tgt_text: string; tgt_source: string; tgt_doc: string
+}
+
 export interface CoverageResult {
   requirement_id: string
   requirement_text: string

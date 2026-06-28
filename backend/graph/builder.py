@@ -150,14 +150,21 @@ class GraphBuilder:
         elem = self.store.get_element(element_id, workspace_id)
         if elem is None:
             return None
+        # Use the CONTAINS edge as the authoritative source for document ownership.
+        # The stored document_id property is a fallback for elements that pre-date the edge.
+        elem_doc_id = self.store.get_element_doc_id(element_id, workspace_id) or elem.document_id
+        is_inter = (
+            bool(elem_doc_id) and bool(req_document_id)
+            and elem_doc_id != req_document_id
+        )
         return {
             "id": elem.id,
             "type": elem.type.value if hasattr(elem.type, "value") else str(elem.type),
             "text": elem.text,
             "source": elem.source,
-            "document_id": elem.document_id,
+            "document_id": elem_doc_id,
             "relationship": relationship,
-            "is_inter_document": elem.document_id != req_document_id,
+            "is_inter_document": is_inter,
         }
 
     def get_traceability_chain(self, req_id: str, workspace_id: str) -> dict[str, Any]:
@@ -165,7 +172,7 @@ class GraphBuilder:
         if req is None:
             return {}
 
-        req_doc_id = req.document_id
+        req_doc_id = self.store.get_element_doc_id(req_id, workspace_id) or req.document_id
 
         full_ids = [r.source_id for r in self.store.get_incoming_relationships(
             req_id, workspace_id, RelationshipType.COVERS)]
@@ -213,7 +220,7 @@ class GraphBuilder:
                 "id": req.id,
                 "type": req.type.value if hasattr(req.type, "value") else str(req.type),
                 "text": req.text, "source": req.source,
-                "document_id": req.document_id,
+                "document_id": req_doc_id,
                 "relationship": "", "is_inter_document": False,
             },
             "full_coverage": enrich_list(full_ids, "COVERS"),

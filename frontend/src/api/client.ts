@@ -1,6 +1,6 @@
 import type {
   AppStatus, CoverageResult, GraphData, TraceabilityChain,
-  GraphNode, EvidenceItem, Workspace,
+  GraphNode, EvidenceItem, Workspace, CrossDocRelationship,
 } from '../types'
 
 const BASE = ''  // vite proxy forwards /api → localhost:8000
@@ -96,6 +96,13 @@ export async function askQuestion(
   })
   if (!r.ok) throw new Error(await r.text())
   return r.json()
+}
+
+export async function fetchCrossDocRelationships(workspaceId: string): Promise<CrossDocRelationship[]> {
+  const r = await fetch(`${ws(workspaceId)}/graph/cross-doc-relationships`)
+  if (!r.ok) throw new Error(await r.text())
+  const data = await r.json()
+  return data.relationships
 }
 
 export async function resetGraph(workspaceId: string): Promise<void> {

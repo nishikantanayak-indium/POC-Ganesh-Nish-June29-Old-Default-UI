@@ -8,11 +8,11 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import * as d3force from 'd3-force'
-import { motion } from 'framer-motion'
-import { RefreshCw, Search, Eye, EyeOff, Zap, Grid } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { RefreshCw, Search, Eye, EyeOff, Zap, Grid, GitBranch, X, ChevronDown, ChevronRight } from 'lucide-react'
 
-import { fetchGraphData, fetchSubgraph } from '../api/client'
-import type { GraphNode, GraphEdge } from '../types'
+import { fetchGraphData, fetchSubgraph, fetchCrossDocRelationships } from '../api/client'
+import type { GraphNode, GraphEdge, CrossDocRelationship } from '../types'
 
 // ── Type config ───────────────────────────────────────────────────────────────
 const TYPE_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
@@ -172,8 +172,224 @@ function toRFEdges(raw: GraphEdge[]): Edge[] {
       style: { stroke: color, strokeWidth: 2 },
       markerEnd: { type: MarkerType.ArrowClosed, color, width: 14, height: 14 },
       animated: e.rtype === 'INTRODUCES_RISK',
+      data: { rtype: e.rtype, conf: e.conf, ev: e.ev },
     }
   })
+}
+
+// ── Cross-document sidebar ────────────────────────────────────────────────────
+
+function CrossDocSidebar({
+  workspaceId,
+  onHighlight,
+  onClose,
+}: {
+  workspaceId: string
+  onHighlight: (srcId: string | null, tgtId: string | null) => void
+  onClose: () => void
+}) {
+  const [rows, setRows]             = useState<CrossDocRelationship[]>([])
+  const [loading, setLoading]       = useState(true)
+  const [error, setError]           = useState<string | null>(null)
+  const [search, setSearch]         = useState('')
+  const [relFilter, setRelFilter]   = useState('All')
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
+
+  useEffect(() => {
+    setLoading(true)
+    setError(null)
+    fetchCrossDocRelationships(workspaceId)
+      .then(setRows)
+      .catch(e => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false))
+  }, [workspaceId])
+
+  const relTypes = useMemo(
+    () => ['All', ...Array.from(new Set(rows.map(r => r.rtype)))],
+    [rows],
+  )
+
+  const filtered = useMemo(() => {
+    let list = rows
+    if (relFilter !== 'All') list = list.filter(r => r.rtype === relFilter)
+    if (search) {
+      const q = search.toLowerCase()
+      list = list.filter(r =>
+        r.src_id.toLowerCase().includes(q) ||
+        r.tgt_id.toLowerCase().includes(q) ||
+        r.ev.toLowerCase().includes(q) ||
+        r.src_doc.toLowerCase().includes(q) ||
+        r.tgt_doc.toLowerCase().includes(q),
+      )
+    }
+    return list
+  }, [rows, relFilter, search])
+
+  return (
+    <div className="w-full h-full flex flex-col border-l border-border bg-surface overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2.5 border-b border-border shrink-0">
+        <div className="flex items-center gap-2">
+          <GitBranch size={13} className="text-primary" />
+          <span className="text-xs font-semibold text-foreground">Cross-Document</span>
+          {!loading && (
+            <span className="text-[10px] font-mono bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">
+              {rows.length}
+            </span>
+          )}
+        </div>
+        <button onClick={onClose} className="text-muted hover:text-foreground transition-colors">
+          <X size={13} />
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+        </div>
+      ) : error ? (
+        <div className="flex-1 flex items-center justify-center px-4">
+          <p className="text-danger text-xs text-center">{error}</p>
+        </div>
+      ) : (
+        <>
+          {/* Rel type filter */}
+          <div className="flex gap-1 px-3 py-2 border-b border-border shrink-0 overflow-x-auto">
+            {relTypes.map(r => (
+              <button
+                key={r}
+                onClick={() => setRelFilter(r)}
+                style={relFilter === r && r !== 'All' ? {
+                  color: EDGE_COLORS[r] ?? 'var(--primary)',
+                  borderColor: `${EDGE_COLORS[r] ?? 'var(--primary)'}55`,
+                  background: `${EDGE_COLORS[r] ?? 'var(--primary)'}18`,
+                } : {}}
+                className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-medium border transition-all ${
+                  relFilter === r && r === 'All'
+                    ? 'bg-primary/20 text-primary border-primary/40'
+                    : relFilter !== r
+                    ? 'text-muted border-border hover:text-foreground'
+                    : ''
+                }`}
+              >
+                {r === 'All' ? 'All' : r.replace(/_/g, ' ')}
+              </button>
+            ))}
+          </div>
+
+          {/* Search */}
+          <div className="px-3 py-2 border-b border-border shrink-0">
+            <div className="flex items-center gap-2 bg-card border border-border rounded-lg px-2.5 py-1.5">
+              <Search size={11} className="text-muted shrink-0" />
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search IDs, docs, evidence…"
+                className="bg-transparent text-xs text-foreground placeholder-muted outline-none w-full"
+              />
+            </div>
+          </div>
+
+          {/* Rows */}
+          <div className="flex-1 overflow-y-auto">
+            {filtered.length === 0 ? (
+              <p className="text-muted text-xs text-center mt-8 px-4">
+                {rows.length === 0
+                  ? 'No cross-document relationships found.\nIngest multiple documents to see links.'
+                  : 'No matches for current filter'}
+              </p>
+            ) : (
+              filtered.map((row, i) => {
+                const color   = EDGE_COLORS[row.rtype] ?? '#6366f1'
+                const srcCfg  = TYPE_CONFIG[row.src_type] ?? TYPE_CONFIG.Document
+                const tgtCfg  = TYPE_CONFIG[row.tgt_type] ?? TYPE_CONFIG.Document
+                const isOpen  = expandedIdx === i
+                return (
+                  <div key={i} className="border-b border-border last:border-0">
+                    <button
+                      className="w-full text-left px-3 py-2.5 hover:bg-card transition-colors"
+                      onClick={() => {
+                        const next = isOpen ? null : i
+                        setExpandedIdx(next)
+                        onHighlight(next !== null ? row.src_id : null, next !== null ? row.tgt_id : null)
+                      }}
+                    >
+                      {/* Rel badge + conf */}
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <span
+                          style={{ color, borderColor: `${color}44`, background: `${color}18` }}
+                          className="text-[9px] font-bold tracking-widest uppercase px-1.5 py-0.5 rounded border font-mono"
+                        >
+                          {row.rtype.replace(/_/g, ' ')}
+                        </span>
+                        <span className="text-[10px] font-mono text-muted ml-auto">
+                          {(row.conf * 100).toFixed(0)}%
+                        </span>
+                        {isOpen
+                          ? <ChevronDown size={10} className="text-muted" />
+                          : <ChevronRight size={10} className="text-muted" />
+                        }
+                      </div>
+                      {/* src → tgt */}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span
+                          style={{ color: srcCfg.color, background: `${srcCfg.color}18`, borderColor: `${srcCfg.color}44` }}
+                          className="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded border"
+                        >
+                          {row.src_id}
+                        </span>
+                        <span className="text-muted text-[10px]">→</span>
+                        <span
+                          style={{ color: tgtCfg.color, background: `${tgtCfg.color}18`, borderColor: `${tgtCfg.color}44` }}
+                          className="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded border"
+                        >
+                          {row.tgt_id}
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* Expanded detail */}
+                    {isOpen && (
+                      <div className="px-3 pb-3 space-y-2">
+                        <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[10px] font-mono">
+                          <span className="text-muted/60">from</span>
+                          <span className="text-muted truncate" title={row.src_doc}>{row.src_doc}</span>
+                          <span className="text-muted/60">to</span>
+                          <span className="text-muted truncate" title={row.tgt_doc}>{row.tgt_doc}</span>
+                        </div>
+                        {row.ev && (
+                          <p className="text-[11px] text-muted/80 leading-relaxed bg-card rounded-lg p-2">
+                            {row.ev}
+                          </p>
+                        )}
+                        {row.src_text && (
+                          <p className="text-[10px] text-muted/60 leading-relaxed line-clamp-2">
+                            <span className="text-muted/40 font-mono">src: </span>{row.src_text}
+                          </p>
+                        )}
+                        {row.tgt_text && (
+                          <p className="text-[10px] text-muted/60 leading-relaxed line-clamp-2">
+                            <span className="text-muted/40 font-mono">tgt: </span>{row.tgt_text}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="px-3 py-2 border-t border-border shrink-0">
+            <span className="text-[10px] text-muted font-mono">
+              {filtered.length} of {rows.length} relationships
+            </span>
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
@@ -189,6 +405,8 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
   const [viewMode, setViewMode] = useState<'full' | 'sub'>('full')
   const [layoutMode, setLayoutMode] = useState<'force' | 'dagre'>('force')
   const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null)
+  const [showCrossDoc, setShowCrossDoc]           = useState(false)
+  const [crossDocPair, setCrossDocPair]           = useState<[string, string] | null>(null)
   const layoutModeRef = useRef(layoutMode)
   layoutModeRef.current = layoutMode
 
@@ -263,19 +481,25 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
   }, [nodes])
 
   const displayEdges = useMemo(() => {
-    if (!highlightedNodeId) return edges
+    if (!highlightedNodeId && !crossDocPair) return edges
     return edges.map(e => {
-      const connected = e.source === highlightedNodeId || e.target === highlightedNodeId
+      let connected = false
+      if (highlightedNodeId) {
+        connected = e.source === highlightedNodeId || e.target === highlightedNodeId
+      } else if (crossDocPair) {
+        connected = (e.source === crossDocPair[0] && e.target === crossDocPair[1])
+          || (e.source === crossDocPair[1] && e.target === crossDocPair[0])
+      }
       return {
         ...e,
         style: {
           ...(e.style ?? {}),
-          opacity: connected ? 1 : 0.1,
+          opacity: connected ? 1 : 0.08,
           strokeWidth: connected ? 3 : 1,
         },
       }
     })
-  }, [edges, highlightedNodeId])
+  }, [edges, highlightedNodeId, crossDocPair])
 
   return (
     <div className="h-full flex flex-col">
@@ -328,6 +552,18 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
             CONTAINS
           </button>
 
+          <button
+            onClick={() => { setShowCrossDoc(v => !v); setCrossDocPair(null) }}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border transition-colors ${
+              showCrossDoc
+                ? 'bg-primary/20 text-primary border-primary/40'
+                : 'border-border text-muted hover:text-foreground'
+            }`}
+          >
+            <GitBranch size={12} />
+            Cross-Doc
+          </button>
+
           <div className="flex items-center gap-1">
             <input
               value={subgraphId}
@@ -362,7 +598,8 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
         </div>
       </div>
 
-      {/* Graph canvas */}
+      {/* Graph canvas + optional sidebar */}
+      <div className="flex-1 flex overflow-hidden">
       <div className="flex-1 relative">
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center z-10 bg-bg/80 backdrop-blur-sm">
@@ -396,6 +633,7 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
           onPaneClick={() => {
             setSelectedNode(null)
             setHighlightedNodeId(null)
+            setCrossDocPair(null)
           }}
           onNodeDoubleClick={handleNodeDoubleClick}
           nodesDraggable={true}
@@ -447,6 +685,27 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
           </motion.div>
         )}
       </div>
+
+      {/* Cross-doc sidebar */}
+      <AnimatePresence>
+        {showCrossDoc && (
+          <motion.div
+            initial={{ width: 0, opacity: 0 }}
+            animate={{ width: 320, opacity: 1 }}
+            exit={{ width: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden shrink-0 h-full"
+          >
+            <CrossDocSidebar
+              workspaceId={workspaceId}
+              onHighlight={(src, tgt) => setCrossDocPair(src && tgt ? [src, tgt] : null)}
+              onClose={() => { setShowCrossDoc(false); setCrossDocPair(null) }}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      </div>{/* end graph+sidebar flex row */}
 
       {/* Edge legend */}
       <div className="flex items-center gap-5 px-4 py-2 border-t border-border bg-surface shrink-0 overflow-x-auto">
