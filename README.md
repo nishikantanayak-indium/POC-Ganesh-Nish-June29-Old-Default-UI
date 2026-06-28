@@ -32,40 +32,41 @@ This POC proves that procurement document intelligence can be fully automated us
 All nodes land in **Neo4j**. Typed edges (`COVERS`, `INTRODUCES_RISK`, `MITIGATED_BY`, `LINKED_TO_LD`, …) connect them across documents. You can then:
 
 - Watch a real-time animated pipeline process your documents step by step
-- Explore an interactive force-directed knowledge graph — drag nodes freely, zoom, expand neighborhoods
-- Get a traceability lineage — which requirements are covered, partial, or missing, with inter-document vs intra-document badge
-- Ask natural language questions — answered by graph traversal + semantic search, cited to exact pages
+- Explore an interactive force-directed knowledge graph — drag nodes freely, zoom, expand neighbourhoods
+- Get a traceability lineage — which requirements are covered, partial, or missing, with inter-document vs intra-document badges
+- Ask natural language questions — answered by graph traversal + semantic search, cited to exact sections
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  React Frontend  (Vite · TypeScript · React Flow)        │
-│  localhost:5173                                           │
-│                                                          │
-│  Upload → Pipeline → Graph → Traceability → Chat         │
-└────────────────────────┬─────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  React Frontend  (Vite · TypeScript · React Flow · d3-force) │
+│  localhost:5173                                               │
+│                                                               │
+│  Landing → Upload → Graph → Traceability → Chat              │
+└────────────────────────┬─────────────────────────────────────┘
                          │ HTTP + SSE (streaming)
-┌────────────────────────▼─────────────────────────────────┐
-│  FastAPI Backend  (uvicorn)                               │
-│  localhost:8000                                           │
-│                                                          │
-│  POST /api/pipeline/run    — SSE streaming pipeline      │
-│  GET  /api/graph/data      — React Flow nodes + edges    │
-│  GET  /api/traceability/*  — coverage + chain            │
-│  POST /api/chat/ask        — Q&A                         │
-│  GET  /api/debug/edges     — edge diagnostics            │
-└───┬──────────────┬──────────────────────────────────────┘
+┌────────────────────────▼─────────────────────────────────────┐
+│  FastAPI Backend  (uvicorn · localhost:8000)                  │
+│                                                               │
+│  POST /api/pipeline/run    — SSE streaming pipeline (5 steps)│
+│  GET  /api/graph/data      — React Flow nodes + edges        │
+│  GET  /api/graph/subgraph  — 1-hop neighbourhood expand      │
+│  GET  /api/traceability/*  — coverage + chain                │
+│  POST /api/chat/ask        — intent-aware Q&A                │
+│  GET  /api/elements        — all elements (for preload)      │
+│  GET  /api/debug/edges     — edge diagnostics by type        │
+└───┬──────────────┬──────────────────────────────────────────-┘
     │              │
-┌───▼───┐      ┌───▼──────────────────────────────────────┐
-│Neo4j  │      │  Python Services                         │
-│:7687  │      │  DocumentService  → LLMExtractor → GPT-4o│
-└───────┘      │  GraphService     → Neo4j + Qdrant       │
-               │  QAService        → Graph + Vector + LLM │
-┌───────┐      └──────────────────────────────────────────┘
-│Qdrant │
+┌───▼───┐      ┌───▼──────────────────────────────────────────┐
+│Neo4j  │      │  Python Services                             │
+│:7687  │      │  DocumentService  → PDFParser/DOCXParser     │
+└───────┘      │                     → LLMExtractor → GPT-4o  │
+               │  GraphService     → Neo4j + Qdrant           │
+┌───────┐      │  QAService        → Graph + Vector + LLM     │
+│Qdrant │      └──────────────────────────────────────────────┘
 │:6333  │
 └───────┘
 ```
@@ -73,18 +74,29 @@ All nodes land in **Neo4j**. Typed edges (`COVERS`, `INTRODUCES_RISK`, `MITIGATE
 ### Pipeline — five steps
 
 ```
-1  Parse          PDF/DOCX → text pages (PyMuPDF / python-docx)
+1  Parse          PDF/DOCX → text pages
+                  ┌ Digital PDF  → PyMuPDF native text extraction (fast)
+                  └ Scanned PDF  → PyMuPDF render at 200 DPI → Tesseract OCR
+                    Pages with > 40% non-ASCII chars are dropped (filters CJK/garbled OCR)
                   SHA-256 dedup skips already-ingested files
 
-2  Extract (LLM)  GPT-4o function calling on chunked text
-                  → AtomicElement objects (Requirement / Clause / Risk / Mitigation / LD)
-                  IDs are doc-scoped: RFP_REQ_001, CONT_CL_001 — prevents Neo4j collisions
+2  Extract (LLM)  Section-aware chunking: section headers detected per page
+                  (Section X / 3.1.2 / APPENDIX A / GCC 6.1 / IV. …)
+                  Each chunk is prefixed with [Section label | Page N] so GPT-4o
+                  knows its structural context.
+                  GPT-4o function calling → AtomicElement objects:
+                    Requirement / Clause / Risk / Mitigation / LD
+                  Every element carries: section, page_number, source (accurate section ref)
+                  IDs are doc-scoped: RFP1_REQ_001, CONT_CL_001 — prevents Neo4j collisions
 
-3  Build Graph    Cross-document relationship extraction (second LLM call, all elements at once)
-                  → COVERS / PARTIALLY_COVERS / INTRODUCES_RISK / MITIGATED_BY / LINKED_TO_LD / CONTRADICTS
+3  Build Graph    Cross-document relationship extraction (second LLM call, all elements)
+                  → COVERS / PARTIALLY_COVERS / INTRODUCES_RISK /
+                     MITIGATED_BY / LINKED_TO_LD / CONTRADICTS
                   Written into Neo4j with Cypher MERGE (idempotent)
+                  Elements stored with section as top-level indexed Neo4j property
 
 4  Index Vectors  BGE-M3 embeddings of all elements → Qdrant
+                  Payload includes: section, page_number — enables section-scoped search
                   Powers semantic Q&A retrieval
 
 5  Coverage       Graph traversal per Requirement
@@ -98,9 +110,10 @@ All nodes land in **Neo4j**. Typed edges (`COVERS`, `INTRODUCES_RISK`, `MITIGATE
 | Frontend | React 18 · TypeScript · Vite · React Flow v12 · d3-force · Tailwind CSS · Framer Motion |
 | API | FastAPI · uvicorn · SSE streaming |
 | LLM extraction | GPT-4o (OpenAI function calling — structured output) |
-| Graph store | Neo4j 5.x (Cypher MERGE, typed edges, uniqueness constraints) |
-| Vector store | Qdrant |
+| Graph store | Neo4j 5.x (Cypher MERGE, typed edges, uniqueness constraints, section index) |
+| Vector store | Qdrant (section + page_number in payload) |
 | Embeddings | BAAI/bge-m3 (sentence-transformers, 1024-dim) |
+| OCR | Tesseract 5.x + pytesseract + PyMuPDF rendering (scanned PDF fallback) |
 
 > **Graphiti has been removed from the active pipeline.** The `graphiti_memory.py` module is kept in the codebase for reference but is not called during document ingestion. It added 30–120 seconds per document (GPT-4o on every page) with no benefit to coverage or traceability queries.
 
@@ -115,6 +128,22 @@ All nodes land in **Neo4j**. Typed edges (`COVERS`, `INTRODUCES_RISK`, `MITIGATE
 | Python | 3.11+ | `python3 --version` |
 | Node.js | 18+ | `node --version` |
 | Docker Desktop | 4.x | `docker --version` |
+| Tesseract | 4.x+ | `tesseract --version` |
+
+**Install Tesseract (required for scanned PDFs):**
+
+```bash
+# macOS
+brew install tesseract
+
+# Ubuntu / Debian
+sudo apt-get install tesseract-ocr
+
+# Windows (WSL2)
+sudo apt-get install tesseract-ocr
+```
+
+> Tesseract is only needed if you upload scanned PDFs (image-based, no embedded text layer). Digital PDFs and DOCX files work without it.
 
 > macOS and Linux tested. Windows works via WSL2 with Docker Desktop.
 
@@ -124,7 +153,7 @@ All nodes land in **Neo4j**. Typed edges (`COVERS`, `INTRODUCES_RISK`, `MITIGATE
 |---------|----------------|-----------|
 | **OpenAI** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | **Yes** — GPT-4o for extraction and Q&A |
 
-> GPT-4o costs approximately **$0.02–0.10 per document pair** (element extraction + cross-document relationship extraction).
+> GPT-4o costs approximately **$0.02–0.15 per document** (element extraction + cross-document relationship extraction). Scanned PDFs with many pages produce more chunks and cost slightly more.
 
 ### Ports that must be free
 
@@ -163,7 +192,14 @@ OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxx
 
 Everything else has working defaults.
 
-### 3 — Start Neo4j and Qdrant
+### 3 — Install Tesseract (for scanned PDFs)
+
+```bash
+brew install tesseract   # macOS
+# or: sudo apt-get install tesseract-ocr
+```
+
+### 4 — Start Neo4j and Qdrant
 
 ```bash
 docker compose up -d
@@ -177,7 +213,7 @@ docker compose ps   # both should show "healthy" or "running"
 
 > **Neo4j browser** is at http://localhost:7474 (user: `neo4j`, password: `password`).
 
-### 4 — Install Python dependencies
+### 5 — Install Python dependencies
 
 ```bash
 python3 -m venv .venv
@@ -187,7 +223,7 @@ pip install -r backend/requirements.txt
 
 > First run downloads the BGE-M3 model (~2 GB). This happens once and is cached by Hugging Face.
 
-### 5 — Install frontend dependencies
+### 6 — Install frontend dependencies
 
 ```bash
 cd frontend
@@ -195,7 +231,7 @@ npm install
 cd ..
 ```
 
-### 6 — Start both servers
+### 7 — Start both servers
 
 **Terminal 1 — API:**
 ```bash
@@ -278,19 +314,25 @@ GraphRAG POC/
 │   │
 │   ├── core/                       ← Pure domain — no I/O, no framework deps
 │   │   ├── models.py               ← AtomicElement, Relationship, ParsedDocument, CoverageResult
+│   │   │                              AtomicElement.metadata carries section + page_number
 │   │   ├── interfaces.py           ← IParser, IExtractor, IGraphStore, IVectorStore (ABCs)
 │   │   └── exceptions.py           ← Typed exception hierarchy
 │   │
 │   ├── parsers/                    ← Text extraction only
-│   │   ├── pdf_parser.py           ← PyMuPDF
+│   │   ├── pdf_parser.py           ← Two-pass: native PyMuPDF text → Tesseract OCR fallback
+│   │   │                              Non-ASCII ratio filter drops garbled CJK pages
 │   │   └── docx_parser.py          ← python-docx
 │   │
 │   ├── extractors/
-│   │   └── llm_extractor.py        ← GPT-4o function calling → AtomicElement + Relationship
+│   │   └── llm_extractor.py        ← Section-aware chunking (_chunk_pages)
+│   │                                  Detects Section X / 3.1.2 / APPENDIX A / GCC 6.1 headers
+│   │                                  Prefixes chunks with [Section | Page N] for LLM context
+│   │                                  GPT-4o function calling → AtomicElement + Relationship
 │   │                                  Two passes: per-doc element extraction, then cross-doc rels
 │   │
 │   ├── graph/
 │   │   ├── neo4j_store.py          ← IGraphStore on Neo4j (Cypher MERGE / MATCH)
+│   │   │                              section stored as top-level indexed property
 │   │   ├── graphiti_memory.py      ← Graphiti episodic memory (unused — kept for reference)
 │   │   ├── builder.py              ← GraphBuilder: build, assess_coverage, traceability chain
 │   │   └── visualizer.py           ← Legacy PyVis generator (unused in React UI)
@@ -298,33 +340,37 @@ GraphRAG POC/
 │   ├── vector/
 │   │   ├── embedder.py             ← BGEEmbedder (lazy-loads BAAI/bge-m3)
 │   │   └── qdrant_store.py         ← IVectorStore on Qdrant
+│   │                                  Payload includes: section, page_number
+│   │                                  search_by_type accepts optional section= filter
 │   │
 │   ├── services/                   ← Orchestration — the only layer the API talks to
 │   │   ├── document_service.py     ← parse + per-doc extract + cross-doc relationship extraction
 │   │   ├── graph_service.py        ← Neo4j + Qdrant build pipeline
 │   │   └── qa_service.py           ← intent detection → evidence → GPT-4o synthesis
 │   │
-│   ├── requirements.txt
+│   ├── requirements.txt            ← Includes pytesseract + Pillow for OCR
 │   ├── .env                        ← Secrets (gitignored — copy from .env.example)
 │   └── .env.example
 │
 ├── frontend/                       ← React + Vite + TypeScript
 │   ├── src/
-│   │   ├── App.tsx                 ← Tab navigation, global state, header
-│   │   ├── types.ts                ← Shared TypeScript types incl. ChainElement
+│   │   ├── App.tsx                 ← Tab navigation, global state, preload on resume
+│   │   ├── types.ts                ← Shared TypeScript types incl. ChainElement, EvidenceItem
 │   │   ├── index.css               ← Tailwind + custom dark theme
 │   │   ├── api/
 │   │   │   └── client.ts           ← fetch wrappers + SSE stream reader
 │   │   └── components/
+│   │       ├── LandingPage.tsx     ← Full-screen landing: Launch / Resume Session
 │   │       ├── UploadZone.tsx      ← Dropzone + pipeline SSE trigger
 │   │       ├── PipelineProgress.tsx← Animated step cards with live progress bars
 │   │       ├── KnowledgeGraph.tsx  ← React Flow + d3-force layout, custom nodes, edge highlighting
 │   │       ├── ElementsTable.tsx   ← Filterable/sortable elements table
 │   │       ├── TraceabilityView.tsx← 4-column card layout with inter/intra document badges
-│   │       └── ChatWindow.tsx      ← Floating chat bubble + conversation panel
+│   │       └── ChatWindow.tsx      ← Floating chat + evidence source cards (collapsible)
 │   ├── package.json
 │   └── vite.config.ts              ← Proxies /api → localhost:8000
 │
+├── Data_Samples/                   ← Sample procurement documents for testing
 ├── .venv/                          ← Python virtual environment (gitignored)
 ├── .gitignore
 ├── docker-compose.yml              ← Neo4j 5.x + Qdrant
@@ -335,6 +381,15 @@ GraphRAG POC/
 ---
 
 ## UI Walkthrough
+
+### Landing page
+
+Opening the app shows a full-screen landing page. Two states:
+
+- **No data** — "Launch App →" button, feature overview
+- **Data present** — "Resume Session →" with live node/edge/type counts and a green dot. Graph tab loads automatically on resume.
+
+Click the logo in the header at any time to return to the landing page.
 
 ### Upload tab
 
@@ -350,11 +405,11 @@ Click **Run Pipeline**. The five steps stream live with progress messages:
 
 | Step | What happens |
 |------|-------------|
-| 📄 Parse Documents | Text extracted from PDF/DOCX; SHA-256 dedup skips unchanged files |
-| 🔍 Extract Elements (LLM) | GPT-4o reads each chunk via function calling; IDs prefixed per doc (e.g. `RFP_REQ_001`) |
-| 🕸️ Build Knowledge Graph | Second LLM call sends all elements together → infers cross-document relationships → written to Neo4j |
-| 🔢 Index Semantic Vectors | BGE-M3 embeddings upserted to Qdrant for semantic Q&A |
-| 📊 Assess Coverage | Graph traversal per Requirement → Covered / Partially Covered / Not Covered |
+| 📄 Parse Documents | SHA-256 dedup skips unchanged files. Digital PDFs extract natively; **scanned PDFs are OCR'd with Tesseract** (page-by-page, ~0.5–1s per page). |
+| 🔍 Extract Elements (LLM) | Section headers detected per page → chunks prefixed with section context → GPT-4o extracts elements with accurate section + page attribution. IDs prefixed per doc (`RFP1_REQ_001`). |
+| 🕸️ Build Knowledge Graph | Second LLM call sends all elements together → infers cross-document relationships → written to Neo4j with `section` as an indexed property. |
+| 🔢 Index Semantic Vectors | BGE-M3 embeddings upserted to Qdrant. Payload includes `section` and `page_number` for future section-scoped queries. |
+| 📊 Assess Coverage | Graph traversal per Requirement → Covered / Partially Covered / Not Covered. |
 
 Re-uploading the same file is safe — the SHA-256 hash check skips it silently.
 
@@ -397,7 +452,7 @@ Each card shows:
 - Relationship label (`COVERS`, `INTRODUCES_RISK`, etc.)
 - **↔ INTER** badge (blue) — element is from a different document than the requirement
 - **↕ INTRA** badge (slate) — element is from the same document
-- Source reference in small monospace
+- Source reference in small monospace (now shows exact section, e.g. `Section 5. Terms of Reference`)
 
 Below the columns: inter-document vs intra-document summary counts, and a red gap alert if any risks have no mitigation or no LD.
 
@@ -413,7 +468,10 @@ Ask anything in plain English. The backend classifies intent and picks the right
 | "no ld", "no penalty" | Graph traversal → Risks without LINKED_TO_LD edge |
 | Everything else | BGE-M3 vector search → relevant elements → GPT-4o synthesis |
 
-Each answer shows a **query type tag** so you know which strategy was used.
+Each answer shows:
+- **Query type tag** — which strategy was used
+- **Concise prose answer** — 2–4 sentences, no inline element IDs
+- **Collapsible source cards** — numbered, coloured by element type, shows section + source reference
 
 ---
 
@@ -438,7 +496,7 @@ In `backend/services/qa_service.py`:
 2. Add a `_gather_<intent>_evidence()` method
 3. Map the new intent in `answer()`
 
-In `frontend/src/components/ChatWindow.tsx` add the label to `QUERY_TYPE_LABELS`.
+In `frontend/src/components/ChatWindow.tsx` add the label to `QUERY_TYPE`.
 
 ### Swapping Neo4j for another graph store
 
@@ -468,14 +526,19 @@ ORDER BY type(r)
 // Count edges by type
 MATCH ()-[r]->() RETURN type(r) AS rel, count(r) AS n ORDER BY n DESC
 
-// Trace a requirement — adjust ID to match actual prefixed format (e.g. RFP_REQ_001)
-MATCH path = (req:Element {id: 'RFP_REQ_001'})-[*1..3]-(related)
+// Elements by section (new — section is now an indexed property)
+MATCH (e:Element {section: 'Section 5. Terms of Reference'})
+RETURN e.id, e.type, e.text
+ORDER BY e.type
+
+// Trace a requirement — adjust ID to match actual prefixed format
+MATCH path = (req:Element {id: 'RFP1_REQ_001'})-[*1..3]-(related)
 RETURN path
 
 // Uncovered requirements
 MATCH (req:Element {type: 'Requirement'})
 WHERE NOT (req)<-[:COVERS]-() AND NOT (req)<-[:PARTIALLY_COVERS]-()
-RETURN req.id, req.text
+RETURN req.id, req.text, req.section
 ```
 
 ---
@@ -494,7 +557,25 @@ The cross-document relationship extraction runs as the second LLM call inside th
 
 4. **Reset and re-upload** — hit the **Wipe DB** button in the header (or `POST /api/reset`), then re-upload all documents. The graph is rebuilt from scratch each run.
 
-5. **Check element IDs** — element IDs are now doc-prefixed (`RFP_REQ_001`, `CONT_CL_001`). If old IDs without prefixes are in Neo4j from a previous run, reset the graph first.
+5. **Check element IDs** — element IDs are now doc-prefixed (`RFP1_REQ_001`, `CONT_CL_001`). If old IDs without prefixes are in Neo4j from a previous run, reset the graph first.
+
+### Scanned PDF extracts nothing
+
+1. **Check Tesseract is installed:**
+   ```bash
+   tesseract --version
+   ```
+   If not found: `brew install tesseract` (macOS) or `sudo apt-get install tesseract-ocr`.
+
+2. **Check backend logs** for lines like:
+   ```
+   Parsed 'rfp.pdf': 146 pages (146 via OCR, 0 skipped)
+   ```
+   If `total_pages = 0`, Tesseract isn't being called or all pages are being filtered.
+
+3. **High non-ASCII ratio filter** — pages where > 40% of OCR output is non-ASCII are dropped. This catches garbled CJK pages but may also drop pages with many special characters. Adjust `non_ascii_threshold` in `PDFParser.__init__` if needed.
+
+4. **Performance** — Tesseract OCR runs at ~0.5–1s per page. A 146-page document takes ~2 minutes to OCR. This happens during the "Extract Elements" step.
 
 ### "Neo4j: Connection refused"
 
