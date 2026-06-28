@@ -91,7 +91,7 @@ class DocumentService:
         """
         logger.info("Processing file: %s (%d bytes)", filename, len(file_bytes))
         parser = ParserFactory.get_parser(filename)
-        doc: ParsedDocument = parser.parse(io.BytesIO(file_bytes), filename)
+        doc: ParsedDocument = parser.parse(io.BytesIO(file_bytes), filename, progress_cb)
         logger.info(
             "Parsed '%s': %d pages, type=%s",
             doc.name,

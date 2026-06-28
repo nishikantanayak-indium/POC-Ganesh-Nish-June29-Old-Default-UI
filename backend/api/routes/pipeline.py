@@ -215,31 +215,43 @@ async def _stream_pipeline(
                     "current": qi, "total": len(to_process)})
         await asyncio.sleep(0)
 
-        # Collect per-chunk progress messages from sync thread via thread-safe queue
+        # Stream progress from sync thread in real-time using a queue +
+        # background task pattern: drain every 300ms while the thread runs.
         progress_q: _queue.SimpleQueue = _queue.SimpleQueue()
 
         def _cb(msg: str, q: _queue.SimpleQueue = progress_q) -> None:
             q.put(msg)
 
+        async def _drain(current: int) -> None:
+            while not progress_q.empty():
+                yield _sse({"type": "step_progress", "step": "extract",
+                            "message": progress_q.get_nowait(),
+                            "current": current, "total": len(to_process)})
+
         try:
             t_file = time.perf_counter()
-            doc, file_elems = await asyncio.to_thread(doc_svc.process_file, fb, fn, _cb)
+            file_task = asyncio.create_task(
+                asyncio.to_thread(doc_svc.process_file, fb, fn, _cb)
+            )
+
+            # Drain queue every 300 ms so OCR/LLM progress appears in real-time
+            while not file_task.done():
+                await asyncio.sleep(0.3)
+                async for chunk in _drain(qi):
+                    yield chunk
+
+            doc, file_elems = await file_task
+
         except Exception as exc:
-            while not progress_q.empty():
-                msg = progress_q.get_nowait()
-                yield _sse({"type": "step_progress", "step": "extract",
-                            "message": msg, "current": qi, "total": len(to_process)})
-                await asyncio.sleep(0)
+            async for chunk in _drain(qi):
+                yield chunk
             yield _sse({"type": "error", "step": "extract", "message": str(exc)})
             await asyncio.sleep(0)
             return
 
-        # Drain all accumulated chunk-level progress messages
-        while not progress_q.empty():
-            msg = progress_q.get_nowait()
-            yield _sse({"type": "step_progress", "step": "extract",
-                        "message": msg, "current": qi + 1, "total": len(to_process)})
-            await asyncio.sleep(0)
+        # Final drain after thread completes
+        async for chunk in _drain(qi + 1):
+            yield chunk
 
         file_elapsed = round(time.perf_counter() - t_file, 1)
         file_hash = hashlib.sha256(fb).hexdigest()

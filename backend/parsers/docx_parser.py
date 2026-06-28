@@ -35,7 +35,7 @@ class DOCXParser(IParser):
         """Return ``True`` for any filename ending in ``.docx`` (case-insensitive)."""
         return Path(filename).suffix.lower() == ".docx"
 
-    def parse(self, file: BinaryIO, filename: str) -> ParsedDocument:
+    def parse(self, file: BinaryIO, filename: str, progress_cb=None) -> ParsedDocument:
         """
         Extract paragraph text from a DOCX file and group it into synthetic
         pages of up to ``PAGE_CHAR_LIMIT`` characters each.

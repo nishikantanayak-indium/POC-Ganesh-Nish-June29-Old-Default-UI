@@ -15,7 +15,7 @@ Design principles:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import BinaryIO, List, Optional
+from typing import BinaryIO, Callable, List, Optional
 
 from .models import (
     AtomicElement,
@@ -42,7 +42,12 @@ class IParser(ABC):
     """
 
     @abstractmethod
-    def parse(self, file: BinaryIO, filename: str) -> ParsedDocument:
+    def parse(
+        self,
+        file: BinaryIO,
+        filename: str,
+        progress_cb: Optional[Callable[[str], None]] = None,
+    ) -> ParsedDocument:
         """
         Read *file* and return a structured :class:`~core.models.ParsedDocument`.
 
