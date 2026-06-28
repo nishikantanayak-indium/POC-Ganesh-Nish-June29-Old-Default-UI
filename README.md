@@ -1,4 +1,4 @@
-# GraphRAG — Procurement Intelligence Suite
+# KnowledgeMap — Procurement Intelligence Suite
 
 > **A multi-workspace knowledge graph platform for procurement document analysis.**  
 > Each workspace is an isolated analysis environment. Upload RFP + Risk Sheet + Contract → automated SSE-streaming pipeline → interactive graph → traceability lineage → natural language Q&A.

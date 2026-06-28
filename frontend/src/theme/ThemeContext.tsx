@@ -12,12 +12,12 @@ const Ctx = createContext<ThemeCtx>({ theme: 'dark', toggle: () => {} })
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<Theme>(() =>
-    (localStorage.getItem('graphrag-theme') as Theme) ?? 'dark'
+    (localStorage.getItem('kmap-theme') as Theme) ?? 'dark'
   )
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
-    localStorage.setItem('graphrag-theme', theme)
+    localStorage.setItem('kmap-theme', theme)
   }, [theme])
 
   return (

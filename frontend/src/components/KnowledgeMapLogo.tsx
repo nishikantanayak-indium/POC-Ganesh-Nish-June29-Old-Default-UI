@@ -1,6 +1,6 @@
 import clsx from 'clsx'
 
-export default function GraphRAGLogo({ size = 24, className = '' }: { size?: number; className?: string }) {
+export default function KMapLogo({ size = 24, className = '' }: { size?: number; className?: string }) {
   const s = size
   // 5-node graph: center + 4 directional nodes
   // viewBox 0 0 48 48

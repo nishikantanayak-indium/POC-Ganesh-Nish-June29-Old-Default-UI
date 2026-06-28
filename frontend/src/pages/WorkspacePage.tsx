@@ -4,7 +4,7 @@ import { Network, Upload, GitBranch, Zap, Trash2, ArrowLeft } from 'lucide-react
 import { motion } from 'framer-motion'
 import clsx from 'clsx'
 
-import GraphRAGLogo from '../components/GraphRAGLogo'
+import KnowledgeMapLogo from '../components/KnowledgeMapLogo'
 import ThemeToggle from '../components/ThemeToggle'
 import WorkflowPanel from '../components/WorkflowPanel'
 import KnowledgeGraph from '../components/KnowledgeGraph'
@@ -142,9 +142,9 @@ export default function WorkspacePage() {
           <div className="w-px h-4 bg-border" />
           <div className="flex items-center gap-2.5">
             <div className="w-6 h-6 rounded-lg bg-primary flex items-center justify-center">
-              <GraphRAGLogo size={14} className="text-foreground" />
+              <KnowledgeMapLogo size={14} className="text-foreground" />
             </div>
-            <span className="font-semibold text-foreground text-sm tracking-tight">GraphRAG</span>
+            <span className="font-semibold text-foreground text-sm tracking-tight">KnowledgeMap</span>
           </div>
         </div>
 

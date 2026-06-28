@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { Network, GitBranch, MessageSquare, Zap, ArrowRight, FolderOpen } from 'lucide-react'
-import GraphRAGLogo from './GraphRAGLogo'
+import KnowledgeMapLogo from './KnowledgeMapLogo'
 import ThemeToggle from './ThemeToggle'
 
 const FEATURES = [
@@ -63,7 +63,7 @@ export default function LandingPage() {
           transition={{ delay: 0.1, duration: 0.4 }}
           className="w-16 h-16 rounded-2xl bg-primary/20 border border-primary/30 flex items-center justify-center mb-6 shadow-lg shadow-primary/10"
         >
-          <GraphRAGLogo size={36} className="text-primary" />
+          <KnowledgeMapLogo size={36} className="text-primary" />
         </motion.div>
 
         {/* Title */}
@@ -73,7 +73,7 @@ export default function LandingPage() {
           transition={{ delay: 0.2 }}
           className="text-5xl font-bold text-foreground tracking-tight mb-2"
         >
-          GraphRAG
+          KnowledgeMap
         </motion.h1>
         <motion.p
           initial={{ opacity: 0 }}

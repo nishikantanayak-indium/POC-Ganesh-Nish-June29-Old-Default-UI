@@ -1,11 +1,14 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Network, Plus, Trash2, FolderOpen, Clock, X } from 'lucide-react'
+import {
+  Plus, Trash2, FolderOpen, Clock, X,
+  GitBranch, Network, ShieldCheck, MessageSquare, ArrowRight,
+} from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import clsx from 'clsx'
 import { fetchWorkspaces, createWorkspace, deleteWorkspace } from '../api/client'
 import type { Workspace } from '../types'
-import GraphRAGLogo from '../components/GraphRAGLogo'
+import KnowledgeMapLogo from '../components/KnowledgeMapLogo'
 import ThemeToggle from '../components/ThemeToggle'
 
 function timeAgo(iso: string): string {
@@ -19,6 +22,15 @@ function timeAgo(iso: string): string {
   return 'just now'
 }
 
+// ── Capability pills shown in hero ────────────────────────────────────────────
+const CAPABILITIES = [
+  { icon: <Network size={12} />,     label: 'Knowledge Graphs'     },
+  { icon: <GitBranch size={12} />,   label: 'Risk Traceability'    },
+  { icon: <ShieldCheck size={12} />, label: 'Coverage Assessment'  },
+  { icon: <MessageSquare size={12}/>,label: 'Semantic Q&A'         },
+]
+
+// ── Create modal ──────────────────────────────────────────────────────────────
 function CreateModal({ onClose, onCreate }: {
   onClose: () => void
   onCreate: (name: string, desc: string) => Promise<void>
@@ -50,7 +62,7 @@ function CreateModal({ onClose, onCreate }: {
         className="bg-surface border border-border rounded-2xl w-full max-w-md shadow-2xl"
       >
         <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border">
-          <h2 className="text-base font-semibold text-foreground">New Analysis Workspace</h2>
+          <h2 className="text-base font-semibold text-foreground">New Workspace</h2>
           <button onClick={onClose} className="text-muted hover:text-foreground transition-colors p-1 rounded-lg hover:bg-card">
             <X size={16} />
           </button>
@@ -62,7 +74,7 @@ function CreateModal({ onClose, onCreate }: {
               autoFocus
               value={name}
               onChange={e => setName(e.target.value)}
-              placeholder="e.g. RFP Analysis Q3 2024"
+              placeholder="e.g. RFP Analysis Q3 2025"
               className="w-full bg-card border border-border rounded-xl px-4 py-2.5 text-sm text-foreground placeholder-muted/50 focus:outline-none focus:border-primary transition-colors"
             />
           </div>
@@ -99,6 +111,7 @@ function CreateModal({ onClose, onCreate }: {
   )
 }
 
+// ── Workspace card ────────────────────────────────────────────────────────────
 function WorkspaceCard({ workspace, onOpen, onDelete }: {
   workspace: Workspace
   onOpen: () => void
@@ -109,63 +122,79 @@ function WorkspaceCard({ workspace, onOpen, onDelete }: {
   return (
     <motion.div
       layout
-      initial={{ opacity: 0, y: 10 }}
+      initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.95 }}
-      className="group relative bg-card border border-border rounded-2xl p-5 hover:border-primary/40 hover:shadow-[0_0_16px_rgba(99,102,241,0.07)] transition-all cursor-pointer"
+      className="group relative bg-card border border-border rounded-2xl overflow-hidden hover:border-primary/40 hover:shadow-[0_4px_32px_rgba(99,102,241,0.10)] transition-all duration-200 cursor-pointer flex flex-col"
       onClick={onOpen}
     >
-      {/* Icon + Name */}
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
-          <FolderOpen size={16} className="text-primary" />
+      {/* Accent gradient top strip — thicker on hover */}
+      <div className="h-[3px] w-full bg-gradient-to-r from-primary/70 via-primary/40 to-transparent group-hover:from-primary group-hover:via-primary/60 transition-all duration-200" />
+
+      <div className="p-5 flex flex-col flex-1">
+        {/* Top row: icon + delete */}
+        <div className="flex items-start justify-between gap-3 mb-3.5">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/20 flex items-center justify-center shrink-0 group-hover:border-primary/35 transition-colors">
+            <FolderOpen size={16} className="text-primary" />
+          </div>
+          <div
+            className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+            onClick={e => e.stopPropagation()}
+          >
+            {confirmDelete ? (
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={onDelete}
+                  className="px-2.5 py-1 rounded-lg text-xs font-medium bg-danger/20 text-danger border border-danger/30 hover:bg-danger/30 transition-colors"
+                >
+                  Delete
+                </button>
+                <button
+                  onClick={() => setConfirmDelete(false)}
+                  className="px-2.5 py-1 rounded-lg text-xs font-medium text-muted border border-border hover:text-foreground transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="p-1.5 rounded-lg text-muted/50 hover:text-danger hover:bg-danger/10 transition-colors"
+              >
+                <Trash2 size={13} />
+              </button>
+            )}
+          </div>
         </div>
-        <div
-          className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-          onClick={e => e.stopPropagation()}
-        >
-          {confirmDelete ? (
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={onDelete}
-                className="px-2.5 py-1 rounded-lg text-xs font-medium bg-danger/20 text-danger border border-danger/30 hover:bg-danger/30 transition-colors"
-              >
-                Delete
-              </button>
-              <button
-                onClick={() => setConfirmDelete(false)}
-                className="px-2.5 py-1 rounded-lg text-xs font-medium text-muted border border-border hover:text-foreground transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setConfirmDelete(true)}
-              className="p-1.5 rounded-lg text-muted hover:text-danger hover:bg-danger/10 transition-colors"
-            >
-              <Trash2 size={13} />
-            </button>
-          )}
+
+        {/* Name + description */}
+        <h3 className="font-semibold text-foreground text-sm leading-snug mb-1.5 truncate group-hover:text-primary transition-colors duration-150">
+          {workspace.name}
+        </h3>
+        {workspace.description ? (
+          <p className="text-xs text-muted/70 line-clamp-2 leading-relaxed flex-1">
+            {workspace.description}
+          </p>
+        ) : (
+          <p className="text-xs text-muted/35 italic flex-1">No description</p>
+        )}
+
+        {/* Footer */}
+        <div className="flex items-center justify-between mt-4 pt-3 border-t border-border/50">
+          <div className="flex items-center gap-1.5 text-[11px] text-muted/50 font-mono">
+            <Clock size={10} />
+            <span>{timeAgo(workspace.updated_at)}</span>
+          </div>
+          <span className="flex items-center gap-1 text-[11px] text-primary font-semibold opacity-0 group-hover:opacity-100 transition-opacity duration-150 bg-primary/10 px-2 py-0.5 rounded-full">
+            Open <ArrowRight size={10} />
+          </span>
         </div>
       </div>
-
-      <h3 className="font-semibold text-foreground text-sm mb-1 truncate">{workspace.name}</h3>
-      {workspace.description && (
-        <p className="text-xs text-muted line-clamp-2 mb-3">{workspace.description}</p>
-      )}
-
-      <div className="flex items-center gap-1 text-xs text-muted/60 font-mono mt-auto">
-        <Clock size={10} />
-        <span>{timeAgo(workspace.updated_at)}</span>
-      </div>
-
-      {/* Open hint */}
-      <div className="absolute inset-x-0 bottom-0 rounded-b-2xl h-0.5 bg-primary scale-x-0 group-hover:scale-x-100 transition-transform origin-left" />
     </motion.div>
   )
 }
 
+// ── Page ──────────────────────────────────────────────────────────────────────
 export default function WorkspacesPage() {
   const navigate = useNavigate()
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
@@ -201,20 +230,18 @@ export default function WorkspacesPage() {
   }
 
   return (
-    <div className="min-h-screen bg-bg">
-      {/* Header */}
-      <header className="border-b border-border bg-surface px-8 py-4 flex items-center justify-between">
+    <div className="h-screen overflow-y-auto bg-bg">
+
+      {/* ── Header ── */}
+      <header className="border-b border-border bg-surface/80 backdrop-blur-sm px-8 py-4 flex items-center justify-between sticky top-0 z-40">
         <button
           onClick={() => navigate('/')}
-          className="flex items-center gap-3 hover:opacity-80 transition-opacity"
+          className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
         >
-          <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center">
-            <GraphRAGLogo size={18} className="text-foreground" />
+          <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
+            <KnowledgeMapLogo size={15} className="text-white" />
           </div>
-          <div>
-            <span className="font-bold text-foreground text-base tracking-tight">GraphRAG</span>
-            <span className="ml-2 text-muted text-xs font-mono">Procurement Intelligence</span>
-          </div>
+          <span className="font-bold text-foreground text-sm tracking-tight">KnowledgeMap</span>
         </button>
         <div className="flex items-center gap-3">
           <ThemeToggle />
@@ -228,13 +255,72 @@ export default function WorkspacesPage() {
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-8 py-10">
-        {/* Hero */}
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold text-foreground">Analysis Workspaces</h1>
-          <p className="text-muted text-sm mt-1">
-            Each workspace is an isolated procurement analysis — separate graph, vectors, and coverage.
-          </p>
+      {/* ── Hero ── */}
+      <div className="relative overflow-hidden border-b border-border">
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background: 'radial-gradient(ellipse at 20% 60%, rgba(99,102,241,0.10) 0%, transparent 50%), radial-gradient(ellipse at 80% 10%, rgba(16,185,129,0.06) 0%, transparent 50%)',
+          }}
+        />
+        <div className="relative max-w-5xl mx-auto px-8 py-5">
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35 }}
+            className="flex items-center justify-between gap-6 flex-wrap"
+          >
+            {/* Left: heading + subtitle */}
+            <div className="flex-1 min-w-0">
+              <h1 className="text-2xl font-bold text-foreground tracking-tight leading-tight mb-1.5">
+                Map every requirement.{' '}
+                <span style={{ color: 'var(--primary)' }}>Trace every risk.</span>
+              </h1>
+              <p className="text-muted text-xs max-w-md leading-relaxed">
+                Upload RFPs, risk sheets, and contracts — extract atomic semantic elements and build a knowledge graph with full requirement traceability.
+              </p>
+            </div>
+
+            {/* Right: capability pills */}
+            <div className="flex flex-wrap gap-1.5 shrink-0">
+              {CAPABILITIES.map(c => (
+                <div
+                  key={c.label}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-card border border-border text-[11px] font-medium text-muted whitespace-nowrap"
+                >
+                  <span style={{ color: 'var(--primary)' }}>{c.icon}</span>
+                  {c.label}
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        </div>
+      </div>
+
+      {/* ── Workspace grid ── */}
+      <main className="max-w-5xl mx-auto px-8 py-6">
+
+        {/* Section heading */}
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-3">
+            <div className="w-[3px] h-5 rounded-full bg-primary" />
+            <h2 className="text-base font-semibold text-foreground">Workspaces</h2>
+            {!loading && workspaces.length > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-mono font-medium">
+                {workspaces.length}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            {['Graph isolation', 'Semantic search', 'Coverage tracking'].map((tag, i) => (
+              <span
+                key={i}
+                className="px-2.5 py-1 rounded-lg bg-card border border-border text-[11px] text-muted/60 font-medium"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
         </div>
 
         {error && (
@@ -246,21 +332,21 @@ export default function WorkspacesPage() {
         {loading ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {[...Array(3)].map((_, i) => (
-              <div key={i} className="h-40 rounded-2xl bg-card border border-border animate-pulse" />
+              <div key={i} className="h-44 rounded-2xl bg-card border border-border animate-pulse" />
             ))}
           </div>
         ) : workspaces.length === 0 ? (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center justify-center py-24 text-center"
+            className="flex flex-col items-center justify-center py-20 text-center"
           >
             <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-4">
               <FolderOpen size={24} className="text-primary" />
             </div>
-            <h2 className="text-base font-semibold text-foreground mb-2">No workspaces yet</h2>
-            <p className="text-sm text-muted mb-6 max-w-xs">
-              Create a workspace to start ingesting procurement documents and building knowledge graphs.
+            <h2 className="text-lg font-bold text-foreground mb-2">No workspaces yet</h2>
+            <p className="text-sm text-muted mb-6 max-w-sm leading-relaxed">
+              Create your first workspace to start ingesting procurement documents and building a knowledge graph with full requirement traceability.
             </p>
             <button
               onClick={() => setShowCreate(true)}
@@ -290,12 +376,14 @@ export default function WorkspacesPage() {
               animate={{ opacity: 1 }}
               onClick={() => setShowCreate(true)}
               className={clsx(
-                'h-full min-h-[11rem] rounded-2xl border-2 border-dashed border-border',
-                'flex flex-col items-center justify-center gap-2 text-muted',
-                'hover:border-primary/40 hover:text-primary transition-all',
+                'min-h-[11rem] rounded-2xl border-2 border-dashed border-border',
+                'flex flex-col items-center justify-center gap-2.5 text-muted',
+                'hover:border-primary/50 hover:text-primary hover:bg-primary/[0.03] transition-all',
               )}
             >
-              <Plus size={20} />
+              <div className="w-8 h-8 rounded-xl border border-current/30 flex items-center justify-center">
+                <Plus size={16} />
+              </div>
               <span className="text-xs font-medium">New workspace</span>
             </motion.button>
           </div>
