@@ -1,60 +1,71 @@
-import { useEffect, useState, useCallback } from 'react'
-import { Network, Upload, GitBranch, MessageSquare, Zap, Trash2 } from 'lucide-react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
+import { Network, Upload, GitBranch, Zap, Trash2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import clsx from 'clsx'
 
 import LandingPage from './components/LandingPage'
-import UploadZone from './components/UploadZone'
+import WorkflowPanel from './components/WorkflowPanel'
 import KnowledgeGraph from './components/KnowledgeGraph'
 import ElementsTable from './components/ElementsTable'
 import TraceabilityView from './components/TraceabilityView'
 import ChatWindow from './components/ChatWindow'
-import PipelineSummaryBadge from './components/PipelineSummaryBadge'
+import { ToastContainer, useToast } from './components/Toast'
 
+import { usePipelineStore } from './store/pipelineStore'
 import { fetchStatus, fetchElements, fetchCoverage, resetGraph } from './api/client'
-import type {
-  AppStatus, GraphNode, CoverageResult, PipelineSummary, PipelineStep, SSEEvent
-} from './types'
+import type { AppStatus, GraphNode, CoverageResult, SSEEvent } from './types'
 
 type Tab = 'upload' | 'elements' | 'graph' | 'traceability'
 
-const INITIAL_STEPS: PipelineStep[] = [
-  { id: 'parse',    label: 'Parse Documents',         icon: '📄', status: 'idle' },
-  { id: 'extract',  label: 'Extract Elements (LLM)',   icon: '🔍', status: 'idle' },
-  { id: 'graph',    label: 'Build Knowledge Graph',    icon: '🕸️', status: 'idle' },
-  { id: 'vector',   label: 'Index Semantic Vectors',   icon: '🔢', status: 'idle' },
-  { id: 'coverage', label: 'Assess Coverage',          icon: '📊', status: 'idle' },
-]
-
 export default function App() {
-  // ── Landing page state ───────────────────────────────────────────────────────
-  const [entered, setEntered] = useState(false)
-  const [status, setStatus] = useState<AppStatus | null>(null)
+  // ── Landing page ─────────────────────────────────────────────────────────────
+  const [entered, setEntered]   = useState(false)
+  const [status, setStatus]     = useState<AppStatus | null>(null)
 
-  // ── App state ────────────────────────────────────────────────────────────────
-  const [tab, setTab] = useState<Tab>('upload')
+  // ── Tab state ─────────────────────────────────────────────────────────────────
+  const [tab, setTab]           = useState<Tab>('upload')
+  // Track which tabs have been visited so we can lazy-mount but then keep alive.
+  // Once a tab mounts it stays in the DOM (display:none when inactive) so
+  // React Flow / WorkflowPanel / Traceability never lose their local state.
+  const [visitedTabs, setVisitedTabs] = useState<Set<Tab>>(new Set<Tab>(['upload']))
+
+  const handleTabChange = useCallback((next: Tab) => {
+    setTab(next)
+    setVisitedTabs(prev => {
+      if (prev.has(next)) return prev
+      const s = new Set(prev)
+      s.add(next)
+      return s
+    })
+  }, [])
+
+  // ── App data ──────────────────────────────────────────────────────────────────
   const [elements, setElements] = useState<GraphNode[]>([])
   const [coverage, setCoverage] = useState<CoverageResult[]>([])
-  const [steps, setSteps] = useState<PipelineStep[]>(INITIAL_STEPS)
-  const [pipelineRunning, setPipelineRunning] = useState(false)
-  const [summary, setSummary] = useState<PipelineSummary | null>(null)
   const [graphRefresh, setGraphRefresh] = useState(0)
   const [resetConfirm, setResetConfirm] = useState(false)
-  const [preloading, setPreloading] = useState(false)
+  const [preloading, setPreloading]     = useState(false)
 
-  // ── Fetch status on mount (powers the landing page) ──────────────────────────
+  // Running indicator derived from Zustand — no counter state needed in App
+  const pipelineRunning = usePipelineStore(state => state.jobs.some(j => j.status === 'running'))
+
+  const { toasts, addToast, removeToast } = useToast()
+
+  // Debounce timer for data refreshes — when multiple pipelines complete within
+  // 2 seconds of each other, we wait for the last one before fetching, so we
+  // always read fully-committed Neo4j state rather than mid-write snapshots.
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // ── Bootstrap ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     fetchStatus()
       .then(s => setStatus(s))
       .catch(() => setStatus({ has_data: false, nodes: 0, edges: 0, type_counts: {} }))
   }, [])
 
-  // ── Preload existing data — splits errors so one failure doesn't kill both ───
   const loadExistingData = useCallback(async () => {
     setPreloading(true)
     let loaded = false
-
-    // Elements
     try {
       const elems = await fetchElements()
       setElements(elems)
@@ -62,80 +73,52 @@ export default function App() {
     } catch (e) {
       console.warn('Could not load elements:', e)
     }
-
-    // Coverage
     try {
       const cov = await fetchCoverage()
       setCoverage(cov)
     } catch (e) {
       console.warn('Could not load coverage:', e)
     }
-
-    // Trigger graph component to fetch its own data
     if (loaded) setGraphRefresh(n => n + 1)
     setPreloading(false)
   }, [])
 
-  // ── Called from landing page CTA ─────────────────────────────────────────────
   const handleEnter = useCallback((hasData: boolean) => {
     setEntered(true)
     if (hasData) {
-      setTab('graph')  // jump straight to graph when resuming
+      handleTabChange('graph')
       loadExistingData()
     }
-  }, [loadExistingData])
+  }, [loadExistingData, handleTabChange])
 
-  // ── SSE event handler ─────────────────────────────────────────────────────────
+  // ── SSE side-effects (App-level only — store handles job state) ───────────────
   const handleSSEEvent = useCallback((evt: SSEEvent) => {
     if (evt.type === 'pipeline_complete') {
-      setSummary(evt.summary)
-      setPipelineRunning(false)
       setGraphRefresh(n => n + 1)
-      loadExistingData()
-      fetchStatus().then(setStatus).catch(console.error)
-      return
+
+      // Debounce the data fetch: if another pipeline completes within 2 s,
+      // cancel and restart the timer so we fetch once after all writes commit.
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+      refreshTimerRef.current = setTimeout(() => {
+        refreshTimerRef.current = null
+        loadExistingData()
+        fetchStatus().then(setStatus).catch(console.error)
+      }, 2000)
     }
-
-    setSteps(prev => {
-      const next = [...prev]
-      const idx = next.findIndex(s => s.id === evt.step)
-      if (idx === -1) return prev
-
-      if (evt.type === 'step_start') {
-        next[idx] = { ...next[idx], status: 'running', message: evt.label }
-      } else if (evt.type === 'step_progress') {
-        next[idx] = {
-          ...next[idx],
-          status: 'running',
-          message: evt.message,
-          progress: { current: evt.current, total: evt.total },
-        }
-      } else if (evt.type === 'step_complete') {
-        next[idx] = { ...next[idx], status: 'complete', count: evt.count, elapsed: evt.elapsed }
-      } else if (evt.type === 'error') {
-        next[idx] = { ...next[idx], status: 'error', message: evt.message }
-      }
-      return next
-    })
   }, [loadExistingData])
 
-  const handlePipelineStart = useCallback(() => {
-    setPipelineRunning(true)
-    setSummary(null)
-    setSteps(INITIAL_STEPS)
-  }, [])
-
+  // ── Reset ─────────────────────────────────────────────────────────────────────
   const handleReset = async () => {
     if (!resetConfirm) { setResetConfirm(true); return }
     await resetGraph()
     setResetConfirm(false)
     setElements([])
     setCoverage([])
-    setSummary(null)
-    setSteps(INITIAL_STEPS)
     setStatus({ has_data: false, nodes: 0, edges: 0, type_counts: {} })
     setGraphRefresh(n => n + 1)
-    setTab('upload')
+    usePipelineStore.getState().clearJobs()
+    handleTabChange('upload')
+    addToast('Graph wiped — ready for new documents', 'success')
     fetchStatus().then(setStatus).catch(console.error)
   }
 
@@ -150,13 +133,22 @@ export default function App() {
     )
   }
 
-  // ── Main app ─────────────────────────────────────────────────────────────────
+  // ── Tab config ────────────────────────────────────────────────────────────────
   const tabs: { id: Tab; label: string; icon: React.ReactNode; disabled?: boolean }[] = [
-    { id: 'upload',       label: 'Upload',        icon: <Upload size={14} /> },
-    { id: 'elements',     label: 'Elements',      icon: <Zap size={14} />,        disabled: !hasData },
-    { id: 'graph',        label: 'Graph',         icon: <Network size={14} />,    disabled: !hasData },
-    { id: 'traceability', label: 'Traceability',  icon: <GitBranch size={14} />,  disabled: !hasData },
+    { id: 'upload',       label: 'Ingest',       icon: <Upload size={14} /> },
+    { id: 'elements',     label: 'Elements',     icon: <Zap size={14} />,       disabled: !hasData },
+    { id: 'graph',        label: 'Graph',        icon: <Network size={14} />,   disabled: !hasData },
+    { id: 'traceability', label: 'Traceability', icon: <GitBranch size={14} />, disabled: !hasData },
   ]
+
+  // Tab panel helper — absolute inset-0 fills the parent precisely;
+  // display:none hides without unmounting so all component state is preserved.
+  const tabStyle = (t: Tab): React.CSSProperties => ({
+    position:  'absolute',
+    inset:     0,
+    display:   tab === t ? 'block' : 'none',
+    overflow:  'hidden',
+  })
 
   return (
     <motion.div
@@ -222,7 +214,7 @@ export default function App() {
         {tabs.map(t => (
           <button
             key={t.id}
-            onClick={() => !t.disabled && setTab(t.id)}
+            onClick={() => !t.disabled && handleTabChange(t.id)}
             disabled={t.disabled}
             className={clsx(
               'flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-all border-b-2 -mb-px',
@@ -248,43 +240,58 @@ export default function App() {
           </button>
         ))}
 
-        {summary && (
-          <div className="ml-auto mb-1">
-            <PipelineSummaryBadge summary={summary} />
+        {pipelineRunning && (
+          <div className="ml-auto mb-1 flex items-center gap-1.5 text-xs text-primary font-mono">
+            <span className="w-2.5 h-2.5 border border-primary/40 border-t-primary rounded-full animate-spin" />
+            Running…
           </div>
         )}
       </nav>
 
-      {/* ── Content ────────────────────────────────────────────────── */}
-      <main className="flex-1 overflow-hidden">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={tab}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.15 }}
-            className="h-full"
-          >
-            {tab === 'upload' && (
-              <UploadZone
-                steps={steps}
-                pipelineRunning={pipelineRunning}
-                onPipelineStart={handlePipelineStart}
-                onSSEEvent={handleSSEEvent}
-                hasData={hasData}
-                onLoadExisting={loadExistingData}
-              />
-            )}
-            {tab === 'elements' && <ElementsTable elements={elements} />}
-            {tab === 'graph' && <KnowledgeGraph refreshKey={graphRefresh} />}
-            {tab === 'traceability' && <TraceabilityView coverage={coverage} />}
-          </motion.div>
-        </AnimatePresence>
+      {/* ── Content — keep-alive tabs ──────────────────────────────── */}
+      {/*
+        Components mount on first visit and stay mounted behind display:none.
+        This preserves WorkflowPanel job history, React Flow zoom/pan state,
+        and all other local state across tab switches.
+      */}
+      <main className="flex-1 overflow-hidden relative">
+        {/* Ingest — always mounted */}
+        <div style={tabStyle('upload')}>
+          <WorkflowPanel
+            onSSEEvent={handleSSEEvent}
+            hasData={hasData}
+            onLoadExisting={loadExistingData}
+            onToast={addToast}
+          />
+        </div>
+
+        {/* Elements — lazy-mounted on first visit */}
+        {visitedTabs.has('elements') && (
+          <div style={tabStyle('elements')}>
+            <ElementsTable elements={elements} />
+          </div>
+        )}
+
+        {/* Graph — lazy-mounted; stays alive so React Flow keeps its state */}
+        {visitedTabs.has('graph') && (
+          <div style={tabStyle('graph')}>
+            <KnowledgeGraph refreshKey={graphRefresh} />
+          </div>
+        )}
+
+        {/* Traceability — lazy-mounted on first visit */}
+        {visitedTabs.has('traceability') && (
+          <div style={tabStyle('traceability')}>
+            <TraceabilityView coverage={coverage} />
+          </div>
+        )}
       </main>
 
       {/* ── Floating chat ───────────────────────────────────────────── */}
       <ChatWindow disabled={!hasData} />
+
+      {/* ── Toast notifications ─────────────────────────────────────── */}
+      <ToastContainer toasts={toasts} onDismiss={removeToast} />
     </motion.div>
   )
 }

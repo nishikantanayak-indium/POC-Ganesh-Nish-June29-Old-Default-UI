@@ -55,7 +55,7 @@ export interface TraceabilityChain {
   gaps: string[]
 }
 
-export type StepStatus = 'idle' | 'running' | 'complete' | 'error' | 'skipped'
+export type StepStatus = 'idle' | 'running' | 'coordinating' | 'complete' | 'error' | 'skipped'
 
 export interface PipelineStep {
   id: string
@@ -74,6 +74,24 @@ export type SSEEvent =
   | { type: 'step_complete'; step: string; count: number; elapsed: number }
   | { type: 'pipeline_complete'; summary: PipelineSummary }
   | { type: 'error'; step: string; message: string }
+
+export interface LogLine {
+  ts: number
+  level: 'info' | 'success' | 'error' | 'warn'
+  msg: string
+}
+
+export interface PipelineJob {
+  id: string
+  runNumber: number
+  files: string[]
+  status: 'running' | 'complete' | 'error'
+  startedAt: number
+  finishedAt?: number
+  steps: PipelineStep[]
+  logs: LogLine[]
+  summary?: PipelineSummary
+}
 
 export interface PipelineSummary {
   documents: number

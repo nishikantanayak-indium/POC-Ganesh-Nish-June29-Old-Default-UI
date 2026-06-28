@@ -300,6 +300,23 @@ class Neo4jGraphStore(IGraphStore):
         except Exception as exc:
             raise GraphStoreError(f"Failed to clear graph: {exc}") from exc
 
+    def clear_document(self, document_id: str) -> None:
+        """Remove all elements (and their relationships) belonging to *document_id*.
+
+        Used for incremental re-ingestion: wipes only the document being
+        replaced so other documents in the graph are preserved.
+        """
+        try:
+            with self._driver.session(database=self._db) as s:
+                s.run(
+                    "MATCH (e:Element {document_id: $did}) DETACH DELETE e",
+                    did=document_id,
+                )
+        except Exception as exc:
+            raise GraphStoreError(
+                f"Failed to clear document '{document_id}': {exc}"
+            ) from exc
+
     def get_graph_for_visualization(self) -> dict:
         """
         Return a ``{"nodes": [...], "edges": [...]}`` dict suitable for

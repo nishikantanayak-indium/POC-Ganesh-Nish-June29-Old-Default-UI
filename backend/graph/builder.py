@@ -81,7 +81,11 @@ class GraphBuilder:
             len(relationships),
         )
 
-        self.store.clear()
+        # Incremental write: evict only the documents being (re-)ingested so
+        # that data from previously ingested documents is preserved in the graph.
+        # This replaces the old full clear() which wiped every run's data.
+        for doc in documents:
+            self.store.clear_document(doc.id)
 
         # --- 1. Document pseudo-nodes -----------------------------------
         _hashes = doc_hashes or {}
