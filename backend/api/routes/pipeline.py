@@ -90,6 +90,14 @@ async def _stream_pipeline(
     yield _sse({"type": "step_complete", "step": "parse", "count": len(to_process), "elapsed": round(time.perf_counter() - t0, 2)})
     yield _sse({"type": "step_start", "step": "extract", "label": "Extracting Elements (LLM)", "total": len(to_process)})
 
+    # Emit per-file "queued" progress so the UI shows filenames while processing
+    for qi, (_, fn) in enumerate(to_process):
+        yield _sse({
+            "type": "step_progress", "step": "extract",
+            "message": f"Processing '{fn}' (OCR + LLM extraction)…",
+            "current": qi, "total": len(to_process),
+        })
+
     try:
         t_extract = time.perf_counter()
         docs, elements, new_hashes = doc_svc.process_files(to_process, existing_hashes)

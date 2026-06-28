@@ -5,6 +5,8 @@ streamlit-agraph>=0.0.45
 # ── Document parsing ────────────────────────────────────────────────────────
 PyMuPDF>=1.24.0
 python-docx>=1.1.0
+pytesseract>=0.3.10      # OCR fallback for scanned PDFs (requires Tesseract binary)
+Pillow>=10.0.0           # image rendering for OCR
 
 # ── LLM — GPT-4o ────────────────────────────────────────────────────────────
 openai>=1.35.0

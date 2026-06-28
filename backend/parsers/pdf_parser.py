@@ -2,12 +2,22 @@
 PDF document parser using PyMuPDF (fitz).
 
 Implements :class:`core.interfaces.IParser` for `.pdf` files.
-Text is extracted page-by-page; near-blank pages (< 20 chars of content)
-are filtered out before the :class:`~core.models.ParsedDocument` is built.
+
+Two-pass extraction:
+1. Native text via ``page.get_text()`` (fast, lossless for digital PDFs).
+2. OCR fallback via Tesseract when a page yields < 20 characters — handles
+   fully scanned PDFs like government RFPs that contain only image layers.
+
+OCR quality filters:
+- Pages where > 40 % of characters are non-ASCII are skipped (handles mixed
+  Korean/CJK pages that tesseract renders as garbage).
+- Pages where the OCR result is still < 20 chars after stripping are dropped.
 """
 
 from __future__ import annotations
 
+import io
+import logging
 import re
 from pathlib import Path
 from typing import BinaryIO
@@ -18,22 +28,79 @@ from core.exceptions import ParseError
 from core.interfaces import IParser
 from core.models import DocumentType, ParsedDocument
 
+logger = logging.getLogger(__name__)
+
+# Lazy-import OCR deps so the parser works even if they are absent (the
+# native-text path still functions for digital PDFs).
+_TESSERACT_AVAILABLE: bool | None = None  # None = not yet checked
+
+
+def _check_tesseract() -> bool:
+    global _TESSERACT_AVAILABLE
+    if _TESSERACT_AVAILABLE is None:
+        try:
+            import pytesseract  # noqa: F401
+            from PIL import Image  # noqa: F401
+            _TESSERACT_AVAILABLE = True
+        except ImportError:
+            _TESSERACT_AVAILABLE = False
+            logger.warning(
+                "pytesseract / Pillow not installed — OCR fallback disabled. "
+                "Install with: pip install pytesseract Pillow"
+            )
+    return _TESSERACT_AVAILABLE  # type: ignore[return-value]
+
+
+def _non_ascii_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    non_ascii = sum(1 for c in text if ord(c) > 127)
+    return non_ascii / len(text)
+
+
+def _ocr_page(page: fitz.Page, dpi: int = 200) -> str:
+    """Render *page* to an image and OCR it with Tesseract."""
+    import pytesseract
+    from PIL import Image
+
+    scale = dpi / 72
+    mat = fitz.Matrix(scale, scale)
+    pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+    img = Image.open(io.BytesIO(pix.tobytes("png")))
+    text: str = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
+    return text
+
 
 class PDFParser(IParser):
-    """Parse PDF files into :class:`~core.models.ParsedDocument` objects."""
+    """Parse PDF files into :class:`~core.models.ParsedDocument` objects.
+
+    Parameters
+    ----------
+    ocr_dpi:
+        Resolution used when rendering scanned pages for OCR (default 200 DPI).
+        Higher values improve accuracy at the cost of speed.
+    non_ascii_threshold:
+        Pages where the fraction of non-ASCII characters exceeds this value
+        are discarded (catches CJK / garbled OCR output).  Default 0.40.
+    """
+
+    def __init__(
+        self,
+        ocr_dpi: int = 200,
+        non_ascii_threshold: float = 0.40,
+    ) -> None:
+        self.ocr_dpi = ocr_dpi
+        self.non_ascii_threshold = non_ascii_threshold
 
     # ------------------------------------------------------------------
     # IParser contract
     # ------------------------------------------------------------------
 
     def supports(self, filename: str) -> bool:
-        """Return ``True`` for any filename ending in ``.pdf`` (case-insensitive)."""
         return Path(filename).suffix.lower() == ".pdf"
 
     def parse(self, file: BinaryIO, filename: str) -> ParsedDocument:
-        """
-        Extract text from every page of a PDF and return a
-        :class:`~core.models.ParsedDocument`.
+        """Extract text from every page, falling back to OCR for scanned pages.
 
         Parameters
         ----------
@@ -45,7 +112,7 @@ class PDFParser(IParser):
         Returns
         -------
         ParsedDocument
-            Pages with fewer than 20 non-whitespace characters are dropped.
+            One entry in ``pages`` per page that yields usable text.
 
         Raises
         ------
@@ -55,30 +122,69 @@ class PDFParser(IParser):
         try:
             data: bytes = file.read()
             pdf_doc = fitz.open(stream=data, filetype="pdf")
+        except Exception as exc:
+            raise ParseError(f"Failed to open PDF '{filename}': {exc}") from exc
 
-            pages = [
-                page.get_text("text")
-                for page in pdf_doc
-            ]
+        ocr_available = _check_tesseract()
+        pages: list[str] = []
+        ocr_count = 0
+        skipped_count = 0
 
-            # Filter near-blank pages
-            pages = [text for text in pages if len(text.strip()) >= 20]
+        for page_num, page in enumerate(pdf_doc, start=1):
+            # ── Pass 1: native text ────────────────────────────────────
+            text: str = page.get_text("text")
 
-            doc_type = _infer_document_type(filename)
-            doc_id = _build_document_id(filename)
+            # ── Pass 2: OCR fallback for image-only pages ──────────────
+            if len(text.strip()) < 20:
+                if not ocr_available:
+                    continue  # can't OCR, skip blank page
+                try:
+                    text = _ocr_page(page, dpi=self.ocr_dpi)
+                    ocr_count += 1
+                except Exception as exc:
+                    logger.warning(
+                        "OCR failed for page %d of '%s': %s", page_num, filename, exc
+                    )
+                    continue
 
-            return ParsedDocument(
-                id=doc_id,
-                name=filename,
-                type=doc_type,
-                pages=pages,
-                total_pages=len(pages),
+            # ── Quality filters ────────────────────────────────────────
+            stripped = text.strip()
+            if len(stripped) < 20:
+                skipped_count += 1
+                continue
+
+            if _non_ascii_ratio(stripped) > self.non_ascii_threshold:
+                logger.debug(
+                    "Skipping page %d of '%s' (high non-ASCII ratio — likely CJK/form)",
+                    page_num,
+                    filename,
+                )
+                skipped_count += 1
+                continue
+
+            pages.append(stripped)
+
+        if ocr_count:
+            logger.info(
+                "Parsed '%s': %d pages (%d via OCR, %d skipped)",
+                filename, len(pages), ocr_count, skipped_count,
+            )
+        else:
+            logger.info(
+                "Parsed '%s': %d pages (%d skipped)",
+                filename, len(pages), skipped_count,
             )
 
-        except Exception as exc:
-            raise ParseError(
-                f"Failed to parse PDF '{filename}': {exc}"
-            ) from exc
+        doc_type = _infer_document_type(filename)
+        doc_id = _build_document_id(filename)
+
+        return ParsedDocument(
+            id=doc_id,
+            name=filename,
+            type=doc_type,
+            pages=pages,
+            total_pages=len(pages),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -86,16 +192,6 @@ class PDFParser(IParser):
 # ---------------------------------------------------------------------------
 
 def _infer_document_type(filename: str) -> DocumentType:
-    """
-    Map a filename to a :class:`~core.models.DocumentType` using simple
-    keyword matching on the lowercased stem.
-
-    Priority order (first match wins):
-    1. RFP  — ``rfp``, ``rfx``, ``tender``
-    2. RISK_SHEET — ``risk``, ``rmc``, ``register``
-    3. CONTRACT — ``contract``, ``offer``, ``agreement``, ``purchase``
-    4. Default → RFP
-    """
     name_lower = Path(filename).stem.lower()
 
     rfp_keywords = ("rfp", "rfx", "tender")
@@ -112,15 +208,6 @@ def _infer_document_type(filename: str) -> DocumentType:
 
 
 def _build_document_id(filename: str) -> str:
-    """
-    Build a stable, filesystem-safe document ID from a filename.
-
-    Steps:
-    1. Take the stem (no extension), lowercase.
-    2. Replace runs of spaces and hyphens with ``_``.
-    3. Strip any remaining non-alphanumeric/underscore characters.
-    4. Prefix with ``DOC_``.
-    """
     stem = Path(filename).stem.lower()
     stem = re.sub(r"[\s\-]+", "_", stem)
     stem = re.sub(r"[^a-z0-9_]", "", stem)

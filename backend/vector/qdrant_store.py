@@ -101,7 +101,7 @@ class QdrantVectorStore(IVectorStore):
         except ValueError:
             etype = ElementType.REQUIREMENT
 
-        return AtomicElement(
+        elem = AtomicElement(
             id=payload.get("element_id", ""),
             type=etype,
             text=payload.get("text", ""),
@@ -109,6 +109,9 @@ class QdrantVectorStore(IVectorStore):
             document_id=payload.get("document_id", ""),
             confidence=float(payload.get("confidence", 1.0)),
         )
+        elem.metadata["section"] = payload.get("section", "")
+        elem.metadata["page_number"] = payload.get("page_number", 0)
+        return elem
 
     # ------------------------------------------------------------------
     # IVectorStore implementation
@@ -151,6 +154,8 @@ class QdrantVectorStore(IVectorStore):
                             "source": elem.source,
                             "document_id": elem.document_id,
                             "confidence": elem.confidence,
+                            "section": elem.metadata.get("section", ""),
+                            "page_number": elem.metadata.get("page_number", 0),
                         },
                     )
                 )
@@ -212,23 +217,38 @@ class QdrantVectorStore(IVectorStore):
         query: str,
         element_type: ElementType,
         n_results: int = 5,
+        section: Optional[str] = None,
     ) -> list[AtomicElement]:
-        """Like :meth:`search` but restricted to a single :class:`ElementType`."""
+        """Like :meth:`search` but restricted to a single :class:`ElementType`.
+
+        Parameters
+        ----------
+        section:
+            Optional section label to further filter results.  When provided,
+            only elements whose ``section`` payload field matches exactly are
+            returned.
+        """
         try:
             qvec: list[float] = self._embedder.embed_one(query)
+            must_conditions = [
+                FieldCondition(
+                    key="type",
+                    match=MatchValue(value=element_type.value),
+                )
+            ]
+            if section is not None:
+                must_conditions.append(
+                    FieldCondition(
+                        key="section",
+                        match=MatchValue(value=section),
+                    )
+                )
             response = self._client.query_points(
                 collection_name=self._collection,
                 query=qvec,
                 limit=n_results,
                 with_payload=True,
-                query_filter=Filter(
-                    must=[
-                        FieldCondition(
-                            key="type",
-                            match=MatchValue(value=element_type.value),
-                        )
-                    ]
-                ),
+                query_filter=Filter(must=must_conditions),
             )
             results: list[AtomicElement] = []
             for hit in response.points:

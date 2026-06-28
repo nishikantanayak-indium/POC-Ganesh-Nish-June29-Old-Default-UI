@@ -52,6 +52,7 @@ class Neo4jGraphStore(IGraphStore):
             s.run(
                 "CREATE INDEX IF NOT EXISTS FOR (e:Element) ON (e.document_id)"
             )
+            s.run("CREATE INDEX IF NOT EXISTS FOR (e:Element) ON (e.section)")
 
     def close(self) -> None:
         """Close the underlying driver and free connection-pool resources."""
@@ -76,7 +77,8 @@ class Neo4jGraphStore(IGraphStore):
             "    e.source = $source, "
             "    e.document_id = $document_id, "
             "    e.confidence = $confidence, "
-            "    e.metadata = $metadata"
+            "    e.metadata = $metadata, "
+            "    e.section = $section"
         )
         params = {
             "id": element.id,
@@ -86,6 +88,7 @@ class Neo4jGraphStore(IGraphStore):
             "document_id": element.document_id,
             "confidence": element.confidence,
             "metadata": str(element.metadata),
+            "section": element.metadata.get("section", ""),
         }
         try:
             with self._driver.session(database=self._db) as s:
@@ -367,6 +370,13 @@ class Neo4jGraphStore(IGraphStore):
             metadata: dict = ast.literal_eval(raw_meta) if raw_meta else {}
         except Exception:
             metadata = {}
+
+        # Populate section/page_number from dedicated indexed node properties
+        # (these override anything that may have been serialised in the metadata string)
+        if props.get("section"):
+            metadata["section"] = props["section"]
+        if props.get("page_number") is not None:
+            metadata["page_number"] = props["page_number"]
 
         return AtomicElement(
             id=props["id"],
