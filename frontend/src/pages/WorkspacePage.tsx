@@ -12,9 +12,9 @@ import ElementsTable from '../components/ElementsTable'
 import TraceabilityView from '../components/TraceabilityView'
 import ChatWindow from '../components/ChatWindow'
 import { ToastContainer, useToast } from '../components/Toast'
-import { usePipelineStore } from '../store/pipelineStore'
+import { usePipelineStore, useWorkspaceJobs } from '../store/pipelineStore'
 import {
-  fetchStatus, fetchElements, fetchCoverage, resetGraph,
+  fetchStatus, fetchElements, fetchCoverage, resetGraph, fetchWorkspace,
 } from '../api/client'
 import type { AppStatus, GraphNode, CoverageResult, SSEEvent } from '../types'
 
@@ -48,14 +48,16 @@ export default function WorkspacePage() {
     setVisitedTabs(prev => prev.has(next) ? prev : new Set([...prev, next]))
   }, [navigate, workspaceId])
 
-  const [status, setStatus]     = useState<AppStatus | null>(null)
-  const [elements, setElements] = useState<GraphNode[]>([])
-  const [coverage, setCoverage] = useState<CoverageResult[]>([])
+  const [status, setStatus]         = useState<AppStatus | null>(null)
+  const [workspaceName, setWorkspaceName] = useState('')
+  const [elements, setElements]     = useState<GraphNode[]>([])
+  const [coverage, setCoverage]     = useState<CoverageResult[]>([])
   const [graphRefresh, setGraphRefresh] = useState(0)
-  const [preloading, setPreloading]     = useState(false)
+  const [preloading, setPreloading] = useState(false)
   const [resetConfirm, setResetConfirm] = useState(false)
 
-  const pipelineRunning = usePipelineStore(state => state.jobs.some(j => j.status === 'running'))
+  const wsJobs = useWorkspaceJobs(workspaceId)
+  const pipelineRunning = wsJobs.some(j => j.status === 'running')
   const { toasts, addToast, removeToast } = useToast()
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -77,7 +79,10 @@ export default function WorkspacePage() {
   }, [workspaceId])
 
   useEffect(() => {
-    usePipelineStore.getState().clearJobs()
+    // Load workspace name for display + cross-workspace toast labels
+    fetchWorkspace(workspaceId)
+      .then(ws => setWorkspaceName(ws.name))
+      .catch(() => {})
     loadData()
   }, [workspaceId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -108,7 +113,7 @@ export default function WorkspacePage() {
     setCoverage([])
     setStatus({ has_data: false, nodes: 0, edges: 0, type_counts: {} })
     setGraphRefresh(n => n + 1)
-    usePipelineStore.getState().clearJobs()
+    usePipelineStore.getState().clearJobs(workspaceId)
     handleTabChange('ingest')
     addToast('Workspace graph wiped', 'success')
   }
@@ -234,6 +239,7 @@ export default function WorkspacePage() {
         <div style={tabStyle('ingest')}>
           <WorkflowPanel
             workspaceId={workspaceId}
+            workspaceName={workspaceName}
             onSSEEvent={handleSSEEvent}
             hasData={hasData}
             onLoadExisting={loadData}

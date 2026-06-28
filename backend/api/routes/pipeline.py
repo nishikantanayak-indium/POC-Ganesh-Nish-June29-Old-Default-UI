@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 import json
+import queue as _queue
 import time
 import uuid
 from typing import AsyncGenerator
@@ -121,8 +123,6 @@ async def _stream_pipeline(
     workspace_id: str,
     file_data: list[tuple[bytes, str]],
 ) -> AsyncGenerator[str, None]:
-    import hashlib
-
     t0 = time.perf_counter()
     run_id = str(uuid.uuid4())
     doc_svc = get_doc_service()
@@ -144,14 +144,18 @@ async def _stream_pipeline(
 
         for fb, fn in file_data:
             h = hashlib.sha256(fb).hexdigest()
+            size_kb = len(fb) / 1024
             if h in known_hashes:
                 skipped.append(fn)
                 yield _sse({"type": "step_progress", "step": "parse",
-                            "message": f"Skipped '{fn}' — already ingested",
+                            "message": f"Skipped '{fn}' ({size_kb:.0f} KB) — already ingested (hash match)",
                             "current": len(skipped), "total": len(file_data)})
-                await asyncio.sleep(0)
             else:
                 to_process.append((fb, fn))
+                yield _sse({"type": "step_progress", "step": "parse",
+                            "message": f"Queued '{fn}' ({size_kb:.0f} KB) for extraction",
+                            "current": len(to_process), "total": len(file_data)})
+            await asyncio.sleep(0)
 
         if not to_process and skipped:
             yield _sse({"type": "step_complete", "step": "parse", "count": 0,
@@ -175,6 +179,7 @@ async def _stream_pipeline(
             await asyncio.sleep(0)
             yield _sse({
                 "type": "pipeline_complete",
+                "workspace_id": workspace_id,
                 "summary": {
                     "documents": 0, "skipped": len(skipped), "elements": 0,
                     "nodes": await asyncio.to_thread(graph_svc.get_node_count),
@@ -191,7 +196,7 @@ async def _stream_pipeline(
         await asyncio.sleep(0)
         return
 
-    # ── Step 2: LLM Extraction ──────────────────────────────────────────
+    # ── Step 2: LLM Extraction — one file at a time for full progress ───
     yield _sse({"type": "step_complete", "step": "parse", "count": len(to_process),
                 "elapsed": round(time.perf_counter() - t0, 2)})
     await asyncio.sleep(0)
@@ -199,38 +204,74 @@ async def _stream_pipeline(
                 "label": "Extracting Elements (LLM)", "total": len(to_process)})
     await asyncio.sleep(0)
 
-    for qi, (_, fn) in enumerate(to_process):
+    t_extract = time.perf_counter()
+    docs: list = []
+    elements: list = []
+    new_hashes: dict = {}
+
+    for qi, (fb, fn) in enumerate(to_process):
         yield _sse({"type": "step_progress", "step": "extract",
-                    "message": f"Processing '{fn}' (OCR + LLM extraction)…",
+                    "message": f"[{qi + 1}/{len(to_process)}] Starting '{fn}'…",
                     "current": qi, "total": len(to_process)})
         await asyncio.sleep(0)
 
-    try:
-        t_extract = time.perf_counter()
-        docs, elements, new_hashes = await asyncio.to_thread(
-            doc_svc.process_files, to_process, existing_hashes
-        )
-        for i, doc in enumerate(docs):
-            yield _sse({
-                "type": "step_progress", "step": "extract",
-                "message": f"Extracted from '{doc.name}' — "
-                           f"{len([e for e in elements if e.document_id == doc.id])} elements",
-                "current": i + 1, "total": len(docs),
-            })
+        # Collect per-chunk progress messages from sync thread via thread-safe queue
+        progress_q: _queue.SimpleQueue = _queue.SimpleQueue()
+
+        def _cb(msg: str, q: _queue.SimpleQueue = progress_q) -> None:
+            q.put(msg)
+
+        try:
+            t_file = time.perf_counter()
+            doc, file_elems = await asyncio.to_thread(doc_svc.process_file, fb, fn, _cb)
+        except Exception as exc:
+            while not progress_q.empty():
+                msg = progress_q.get_nowait()
+                yield _sse({"type": "step_progress", "step": "extract",
+                            "message": msg, "current": qi, "total": len(to_process)})
+                await asyncio.sleep(0)
+            yield _sse({"type": "error", "step": "extract", "message": str(exc)})
             await asyncio.sleep(0)
-    except Exception as exc:
-        yield _sse({"type": "error", "step": "extract", "message": str(exc)})
+            return
+
+        # Drain all accumulated chunk-level progress messages
+        while not progress_q.empty():
+            msg = progress_q.get_nowait()
+            yield _sse({"type": "step_progress", "step": "extract",
+                        "message": msg, "current": qi + 1, "total": len(to_process)})
+            await asyncio.sleep(0)
+
+        file_elapsed = round(time.perf_counter() - t_file, 1)
+        file_hash = hashlib.sha256(fb).hexdigest()
+        new_hashes[doc.id] = file_hash
+        docs.append(doc)
+        elements.extend(file_elems)
+
+        type_counts: dict[str, int] = {}
+        for e in file_elems:
+            type_counts[e.type.value] = type_counts.get(e.type.value, 0) + 1
+        types_str = "  ".join(f"{v}x{k}" for k, v in sorted(type_counts.items()))
+
+        yield _sse({"type": "step_progress", "step": "extract",
+                    "message": (
+                        f"[{qi + 1}/{len(to_process)}] '{fn}' done — "
+                        f"{len(file_elems)} elements · {doc.total_pages}p · {doc.type.value} · {file_elapsed}s"
+                        + (f"  [{types_str}]" if types_str else "")
+                    ),
+                    "current": qi + 1, "total": len(to_process)})
         await asyncio.sleep(0)
-        return
 
     yield _sse({"type": "step_complete", "step": "extract", "count": len(elements),
                 "elapsed": round(time.perf_counter() - t_extract, 2)})
     await asyncio.sleep(0)
 
     if not docs:
-        yield _sse({"type": "pipeline_complete",
-                    "summary": {"documents": 0, "elements": 0, "nodes": 0, "edges": 0,
-                                "elapsed": round(time.perf_counter() - t0, 2)}})
+        yield _sse({
+            "type": "pipeline_complete",
+            "workspace_id": workspace_id,
+            "summary": {"documents": 0, "elements": 0, "nodes": 0, "edges": 0,
+                        "elapsed": round(time.perf_counter() - t0, 2)},
+        })
         await asyncio.sleep(0)
         return
 
@@ -247,8 +288,9 @@ async def _stream_pipeline(
             coordinator.submit_and_wait(result, workspace_id)
         )
 
+        pending_count = await coordinator.pending_count()
         yield _sse({"type": "step_progress", "step": "graph",
-                    "message": "Queued for cross-document analysis — waiting for peer pipelines…",
+                    "message": f"Queued for cross-document analysis — {pending_count} pipeline(s) in batch, waiting for quiescence window…",
                     "current": 0, "total": len(elements)})
         await asyncio.sleep(0)
 
@@ -258,7 +300,7 @@ async def _stream_pipeline(
             if not submit_task.done() and not sent_running:
                 sent_running = True
                 yield _sse({"type": "step_progress", "step": "graph",
-                            "message": "Running cross-document analysis…",
+                            "message": "Running cross-document relationship extraction via LLM…",
                             "current": 0, "total": len(elements)})
                 await asyncio.sleep(0)
 
@@ -266,16 +308,26 @@ async def _stream_pipeline(
 
         relationships = result.relationships
         batch_size = result.batch_size
-        batch_note = f" (batch of {batch_size})" if batch_size > 1 else ""
+        batch_note = f" (shared batch of {batch_size} pipelines)" if batch_size > 1 else ""
+
+        rel_type_counts: dict[str, int] = {}
+        for r in relationships:
+            rt = r.type.value if hasattr(r.type, "value") else str(r.type)
+            rel_type_counts[rt] = rel_type_counts.get(rt, 0) + 1
+        rel_detail = "  ".join(f"{v}x{k}" for k, v in sorted(rel_type_counts.items()))
 
         yield _sse({"type": "step_progress", "step": "graph",
-                    "message": f"Found {len(relationships)} cross-document relationships{batch_note} — writing graph…",
+                    "message": (
+                        f"Found {len(relationships)} relationship(s){batch_note}"
+                        + (f"  [{rel_detail}]" if rel_detail else "")
+                        + " — writing to Neo4j…"
+                    ),
                     "current": len(elements), "total": len(elements)})
         await asyncio.sleep(0)
 
         async with write_lock:
             yield _sse({"type": "step_progress", "step": "graph",
-                        "message": "Writing graph to Neo4j…",
+                        "message": f"Merging {len(elements)} nodes + {len(relationships)} edges into Neo4j…",
                         "current": len(elements), "total": len(elements)})
             await asyncio.sleep(0)
             await asyncio.to_thread(
@@ -283,6 +335,12 @@ async def _stream_pipeline(
                 elements, relationships, docs, workspace_id, new_hashes,
             )
             node_count = await asyncio.to_thread(graph_svc.get_node_count)
+            edge_count = await asyncio.to_thread(graph_svc.get_edge_count)
+
+        yield _sse({"type": "step_progress", "step": "graph",
+                    "message": f"Graph updated — {node_count} total nodes · {edge_count} total edges in workspace",
+                    "current": len(elements), "total": len(elements)})
+        await asyncio.sleep(0)
 
         yield _sse({"type": "step_complete", "step": "graph", "count": node_count,
                     "elapsed": round(time.perf_counter() - t_graph, 2)})
@@ -298,6 +356,10 @@ async def _stream_pipeline(
     await asyncio.sleep(0)
     try:
         t_vec = time.perf_counter()
+        yield _sse({"type": "step_progress", "step": "vector",
+                    "message": f"Embedding {len(elements)} elements with BGE-M3 → Qdrant ws_{workspace_id[:8]}…",
+                    "current": 0, "total": len(elements)})
+        await asyncio.sleep(0)
         async with write_lock:
             await asyncio.to_thread(graph_svc.vector_store.upsert, elements)
         yield _sse({"type": "step_complete", "step": "vector", "count": len(elements),
@@ -308,9 +370,6 @@ async def _stream_pipeline(
         await asyncio.sleep(0)
 
     # ── Step 5: Coverage Assessment ─────────────────────────────────────
-    # Re-sync cross-doc relationships across ALL workspace elements before
-    # assessing coverage. This ensures correctness regardless of whether
-    # files were ingested in one batch or across separate pipeline runs.
     yield _sse({"type": "step_start", "step": "coverage",
                 "label": "Assessing Coverage", "total": 0})
     await asyncio.sleep(0)
@@ -321,21 +380,22 @@ async def _stream_pipeline(
             graph_svc.store.get_all_elements, workspace_id
         )
         doc_ids = {e.document_id for e in all_ws_elements if e.document_id}
+
         if len(doc_ids) > 1:
-            # Multiple documents — re-extract all relationships so that
-            # files ingested in separate pipeline runs still get cross-doc
-            # COVERS/PARTIALLY_COVERS links (coordinator may have silently
-            # failed on a prior run if they arrived >6 s apart).
             yield _sse({"type": "step_progress", "step": "coverage",
-                        "message": "Syncing cross-document relationships…",
+                        "message": f"Syncing cross-document relationships across {len(doc_ids)} documents…",
                         "current": 0, "total": 0})
             await asyncio.sleep(0)
             try:
                 cross_rels = await asyncio.to_thread(
                     doc_svc.extract_cross_document_relationships, all_ws_elements
                 )
-                write_lock = _get_write_lock(workspace_id)
-                async with write_lock:
+                yield _sse({"type": "step_progress", "step": "coverage",
+                            "message": f"Re-synced {len(cross_rels)} cross-doc relationships — persisting…",
+                            "current": 0, "total": 0})
+                await asyncio.sleep(0)
+                cov_write_lock = _get_write_lock(workspace_id)
+                async with cov_write_lock:
                     for rel in cross_rels:
                         try:
                             await asyncio.to_thread(
@@ -344,9 +404,27 @@ async def _stream_pipeline(
                         except Exception:
                             pass
             except Exception:
-                pass  # Non-fatal — assess coverage with whatever is in the graph
+                pass  # Non-fatal
+
+        req_count = sum(1 for e in all_ws_elements if e.type.value == "Requirement")
+        yield _sse({"type": "step_progress", "step": "coverage",
+                    "message": f"Assessing coverage for {req_count} requirement(s)…",
+                    "current": 0, "total": 0})
+        await asyncio.sleep(0)
 
         coverage = await asyncio.to_thread(graph_svc.get_coverage_results)
+
+        covered = sum(1 for c in coverage if c.status.value == "Covered")
+        partial = sum(1 for c in coverage if c.status.value == "Partially Covered")
+        not_cov = sum(1 for c in coverage if c.status.value == "Not Covered")
+        yield _sse({"type": "step_progress", "step": "coverage",
+                    "message": (
+                        f"Coverage result: {covered} covered · {partial} partial · {not_cov} not covered"
+                        f" (of {len(coverage)} requirements)"
+                    ),
+                    "current": 0, "total": 0})
+        await asyncio.sleep(0)
+
         yield _sse({"type": "step_complete", "step": "coverage", "count": len(coverage),
                     "elapsed": round(time.perf_counter() - t_cov, 2)})
         await asyncio.sleep(0)
@@ -357,6 +435,7 @@ async def _stream_pipeline(
 
     yield _sse({
         "type": "pipeline_complete",
+        "workspace_id": workspace_id,
         "summary": {
             "documents": len(docs), "skipped": len(skipped), "elements": len(elements),
             "nodes": await asyncio.to_thread(graph_svc.get_node_count),

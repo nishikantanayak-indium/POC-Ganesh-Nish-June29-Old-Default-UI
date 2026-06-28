@@ -5,7 +5,8 @@ import clsx from 'clsx'
 
 import { streamPipeline } from '../api/client'
 import type { PipelineStep, SSEEvent, LogLine, PipelineJob } from '../types'
-import { usePipelineStore } from '../store/pipelineStore'
+import { usePipelineStore, useWorkspaceJobs } from '../store/pipelineStore'
+import { useGlobalToastStore } from '../store/globalToastStore'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -284,6 +285,7 @@ function JobCard({ job }: { job: PipelineJob }) {
 
 export interface WorkflowPanelProps {
   workspaceId: string
+  workspaceName: string
   onSSEEvent: (evt: SSEEvent) => void
   hasData: boolean
   onLoadExisting: () => void
@@ -293,11 +295,13 @@ export interface WorkflowPanelProps {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function WorkflowPanel({
-  workspaceId, onSSEEvent, hasData, onLoadExisting, onToast,
+  workspaceId, workspaceName, onSSEEvent, hasData, onLoadExisting, onToast,
 }: WorkflowPanelProps) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [dragging, setDragging]         = useState(false)
-  const { jobs, addJob, patchJob, nextRunNumber } = usePipelineStore()
+  const { addJob, patchJob, nextRunNumber } = usePipelineStore()
+  const jobs       = useWorkspaceJobs(workspaceId)
+  const addGlobalToast = useGlobalToastStore(s => s.add)
   const inputRef    = useRef<HTMLInputElement>(null)
   const runningJobs = jobs.filter(j => j.status === 'running').length
 
@@ -326,7 +330,7 @@ export default function WorkflowPanel({
     if (!pendingFiles.length) return
 
     const filesToProcess = [...pendingFiles]
-    const num   = nextRunNumber()
+    const num   = nextRunNumber(workspaceId)
     const jobId = `job-${num}-${Date.now()}`
 
     setPendingFiles([])
@@ -339,14 +343,9 @@ export default function WorkflowPanel({
       steps: freshSteps(),
       logs: [],
     }
-    // Prepend new job — functional update always works on latest state
-    addJob(newJob)
+    addJob(workspaceId, newJob)
 
-    // Pure state patch — only updates the job matching jobId.
-    // IMPORTANT: the fn passed here must be a pure state transform — no side
-    // effects, no other setState calls inside it (React may run it multiple
-    // times in concurrent mode).
-    const patch = (fn: (j: PipelineJob) => PipelineJob) => patchJob(jobId, fn)
+    const patch = (fn: (j: PipelineJob) => PipelineJob) => patchJob(workspaceId, jobId, fn)
 
     streamPipeline(
       workspaceId,
@@ -360,9 +359,12 @@ export default function WorkflowPanel({
         // ── Side effects first, OUTSIDE any state updater ──────────
         onSSEEvent(evt)
         if (evt.type === 'pipeline_complete') {
-          onToast(
-            `Run #${num} complete — ${evt.summary.elements} elements · ${evt.summary.edges} edges`,
+          // Global toast works even if user has navigated to another workspace
+          addGlobalToast(
+            `Run #${num} complete — ${evt.summary.elements} elements · ${evt.summary.edges} edges · ${evt.summary.elapsed}s`,
             'success',
+            workspaceId,
+            workspaceName,
           )
         }
 
@@ -404,7 +406,7 @@ export default function WorkflowPanel({
         onToast(`Run #${num} failed — ${errMsg}`, 'error')
       },
     )
-  }, [pendingFiles, onSSEEvent, onToast, addJob, patchJob, nextRunNumber])
+  }, [pendingFiles, workspaceId, workspaceName, onSSEEvent, onToast, addJob, patchJob, nextRunNumber, addGlobalToast])
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -412,7 +414,7 @@ export default function WorkflowPanel({
     <div className="h-full flex flex-col overflow-hidden">
 
       {/* ── Resume banner ───────────────────────────────────────────── */}
-      {hasData && jobs.length === 0 && (
+      {hasData && jobs.length === 0 && runningJobs === 0 && (
         <div className="shrink-0 border-b border-border px-6 py-3 flex items-center justify-between">
           <span className="text-xs text-muted font-mono">Workspace already has graph data</span>
           <button

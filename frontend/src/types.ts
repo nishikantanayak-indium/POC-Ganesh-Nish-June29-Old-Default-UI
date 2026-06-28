@@ -86,7 +86,7 @@ export type SSEEvent =
   | { type: 'step_start'; step: string; label: string; total: number }
   | { type: 'step_progress'; step: string; message: string; current: number; total: number }
   | { type: 'step_complete'; step: string; count: number; elapsed: number }
-  | { type: 'pipeline_complete'; summary: PipelineSummary }
+  | { type: 'pipeline_complete'; workspace_id: string; summary: PipelineSummary }
   | { type: 'error'; step: string; message: string }
 
 export interface LogLine {

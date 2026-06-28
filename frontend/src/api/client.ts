@@ -36,6 +36,12 @@ export async function updateWorkspace(
   return r.json()
 }
 
+export async function fetchWorkspace(id: string): Promise<Workspace> {
+  const r = await fetch(`${BASE}/api/workspaces/${id}`)
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
 export async function deleteWorkspace(id: string): Promise<void> {
   const r = await fetch(`${BASE}/api/workspaces/${id}`, { method: 'DELETE' })
   if (!r.ok) throw new Error(await r.text())

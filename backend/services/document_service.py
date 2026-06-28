@@ -24,7 +24,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from parsers import ParserFactory
 from extractors import LLMExtractor
@@ -64,6 +64,7 @@ class DocumentService:
         self,
         file_bytes: bytes,
         filename: str,
+        progress_cb: Callable[[str], None] | None = None,
     ) -> tuple[ParsedDocument, list[AtomicElement]]:
         """
         Parse a single file and extract its typed atomic elements.
@@ -97,7 +98,13 @@ class DocumentService:
             doc.total_pages,
             doc.type.value,
         )
-        elements: list[AtomicElement] = self._extractor.extract_elements(doc)
+        if progress_cb:
+            progress_cb(
+                f"  Parsed '{doc.name}': {doc.total_pages} page(s), type={doc.type.value}"
+            )
+        elements: list[AtomicElement] = self._extractor.extract_elements(
+            doc, progress_cb=progress_cb
+        )
         logger.info(
             "Extracted %d elements from '%s'",
             len(elements),

@@ -1,5 +1,7 @@
 import json
+import logging
 import re
+from typing import Callable
 
 from openai import OpenAI
 
@@ -7,6 +9,8 @@ from config.settings import settings
 from core.models import ParsedDocument, AtomicElement, Relationship, ElementType, RelationshipType
 from core.interfaces import IExtractor
 from core.exceptions import ExtractionError
+
+logger = logging.getLogger(__name__)
 
 
 ELEMENT_TOOL = {
@@ -222,11 +226,13 @@ class LLMExtractor(IExtractor):
     # IExtractor interface
     # ------------------------------------------------------------------
 
-    def extract_elements(self, doc: ParsedDocument) -> list[AtomicElement]:
+    def extract_elements(
+        self,
+        doc: ParsedDocument,
+        progress_cb: Callable[[str], None] | None = None,
+    ) -> list[AtomicElement]:
         chunks = self._chunk_pages(doc.pages)
-        # raw_elements carries the parsed dict plus chunk-level metadata
         raw_elements: list[dict] = []
-        # chunk_meta maps a list index to (section_label, start_page) for that element
         chunk_meta: list[tuple[str, int]] = []
         counters: dict[str, int] = {t: 0 for t in ["REQ", "CL", "RISK", "MIT", "LD"]}
         prefix_map: dict[str, str] = {
@@ -237,7 +243,16 @@ class LLMExtractor(IExtractor):
             "LD": "LD",
         }
 
+        if progress_cb:
+            progress_cb(f"  {len(chunks)} section-chunk(s) to process via {settings.llm_model}")
+
         for i, (section_label, chunk_text, start_page) in enumerate(chunks):
+            if progress_cb:
+                progress_cb(
+                    f"  LLM [{i + 1}/{len(chunks)}] {section_label[:50]} (p.{start_page})"
+                    f" — {len(chunk_text)} chars"
+                )
+
             source_hint = f"{doc.name} — {section_label}"
             start_nums = {k: counters[k] + 1 for k in counters}
             system = (
@@ -276,6 +291,7 @@ class LLMExtractor(IExtractor):
                     max_tokens=settings.max_tokens_extraction,
                 )
                 tc = resp.choices[0].message.tool_calls
+                n_found = 0
                 if tc:
                     data = json.loads(tc[0].function.arguments)
                     for e in data.get("elements", []):
@@ -284,13 +300,24 @@ class LLMExtractor(IExtractor):
                             chunk_meta.append((section_label, start_page))
                             pfx = prefix_map.get(e["type"], "REQ")
                             counters[pfx] += 1
+                            n_found += 1
+                if progress_cb:
+                    usage = resp.usage
+                    tok_info = (
+                        f" ({usage.prompt_tokens}+{usage.completion_tokens} tok)"
+                        if usage else ""
+                    )
+                    progress_cb(
+                        f"  ✓ [{i + 1}/{len(chunks)}] {n_found} element(s) above threshold{tok_info}"
+                    )
             except Exception as ex:
+                if progress_cb:
+                    progress_cb(f"  ✗ [{i + 1}/{len(chunks)}] extraction failed: {ex}")
                 raise ExtractionError(
                     f"Element extraction failed on chunk {i}: {ex}"
                 ) from ex
 
         # Deduplicate: within same type, if word overlap > 70% keep higher confidence
-        # chunk_meta is kept in sync with raw_elements throughout dedup
         deduped: list[dict] = []
         deduped_meta: list[tuple[str, int]] = []
         for idx, elem in enumerate(raw_elements):
@@ -310,6 +337,11 @@ class LLMExtractor(IExtractor):
             if not duplicate:
                 deduped.append(elem)
                 deduped_meta.append(chunk_meta[idx])
+
+        if progress_cb and len(raw_elements) != len(deduped):
+            progress_cb(
+                f"  Dedup: {len(raw_elements)} raw → {len(deduped)} unique elements"
+            )
 
         # Prefix IDs with a short doc slug so elements from different documents
         # never collide on MERGE in Neo4j (e.g. RFP_REQ_001 vs CON_REQ_001).
