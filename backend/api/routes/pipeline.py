@@ -17,8 +17,12 @@ import time
 import uuid
 from typing import AsyncGenerator
 
+import logging
+
 from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import StreamingResponse
+
+logger = logging.getLogger(__name__)
 
 from api.deps import get_doc_service, get_graph_service
 
@@ -82,7 +86,8 @@ class _Coordinator:
             relationships = await asyncio.to_thread(
                 doc_svc.extract_cross_document_relationships, combined
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("Coordinator cross-doc extraction failed for workspace %s: %s", workspace_id, exc)
             relationships = []
 
         for r in batch:
@@ -303,11 +308,44 @@ async def _stream_pipeline(
         await asyncio.sleep(0)
 
     # ── Step 5: Coverage Assessment ─────────────────────────────────────
+    # Re-sync cross-doc relationships across ALL workspace elements before
+    # assessing coverage. This ensures correctness regardless of whether
+    # files were ingested in one batch or across separate pipeline runs.
     yield _sse({"type": "step_start", "step": "coverage",
                 "label": "Assessing Coverage", "total": 0})
     await asyncio.sleep(0)
     try:
         t_cov = time.perf_counter()
+
+        all_ws_elements = await asyncio.to_thread(
+            graph_svc.store.get_all_elements, workspace_id
+        )
+        doc_ids = {e.document_id for e in all_ws_elements if e.document_id}
+        if len(doc_ids) > 1:
+            # Multiple documents — re-extract all relationships so that
+            # files ingested in separate pipeline runs still get cross-doc
+            # COVERS/PARTIALLY_COVERS links (coordinator may have silently
+            # failed on a prior run if they arrived >6 s apart).
+            yield _sse({"type": "step_progress", "step": "coverage",
+                        "message": "Syncing cross-document relationships…",
+                        "current": 0, "total": 0})
+            await asyncio.sleep(0)
+            try:
+                cross_rels = await asyncio.to_thread(
+                    doc_svc.extract_cross_document_relationships, all_ws_elements
+                )
+                write_lock = _get_write_lock(workspace_id)
+                async with write_lock:
+                    for rel in cross_rels:
+                        try:
+                            await asyncio.to_thread(
+                                graph_svc.store.add_relationship, rel, workspace_id
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                pass  # Non-fatal — assess coverage with whatever is in the graph
+
         coverage = await asyncio.to_thread(graph_svc.get_coverage_results)
         yield _sse({"type": "step_complete", "step": "coverage", "count": len(coverage),
                     "elapsed": round(time.perf_counter() - t_cov, 2)})

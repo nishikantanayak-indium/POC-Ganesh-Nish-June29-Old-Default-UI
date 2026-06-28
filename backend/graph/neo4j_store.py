@@ -189,7 +189,7 @@ class Neo4jGraphStore(IGraphStore):
             rels: list[Relationship] = []
             with self._driver.session(database=self._db) as s:
                 for r in s.run(
-                    "MATCH (a:Element {id: $id, workspace_id: $wid})-[r]->(b:Element) "
+                    "MATCH (a:Element {id: $id, workspace_id: $wid})-[r]->(b:Element {workspace_id: $wid}) "
                     "RETURN a.id AS src, type(r) AS rtype, b.id AS tgt, "
                     "       r.confidence AS conf, r.evidence AS ev",
                     id=element_id, wid=workspace_id,
@@ -199,7 +199,7 @@ class Neo4jGraphStore(IGraphStore):
                         seen.add(key)
                         rels.append(self._record_to_relationship(r))
                 for r in s.run(
-                    "MATCH (a:Element)-[r]->(b:Element {id: $id, workspace_id: $wid}) "
+                    "MATCH (a:Element {workspace_id: $wid})-[r]->(b:Element {id: $id, workspace_id: $wid}) "
                     "RETURN a.id AS src, type(r) AS rtype, b.id AS tgt, "
                     "       r.confidence AS conf, r.evidence AS ev",
                     id=element_id, wid=workspace_id,
@@ -221,14 +221,14 @@ class Neo4jGraphStore(IGraphStore):
         try:
             if rel_type is not None:
                 query = (
-                    f"MATCH (a:Element)-[r:{rel_type.value}]->"
+                    f"MATCH (a:Element {{workspace_id: $wid}})-[r:{rel_type.value}]->"
                     f"(b:Element {{id: $id, workspace_id: $wid}}) "
                     f"RETURN a.id AS src, type(r) AS rtype, b.id AS tgt, "
                     f"       r.confidence AS conf, r.evidence AS ev"
                 )
             else:
                 query = (
-                    "MATCH (a:Element)-[r]->(b:Element {id: $id, workspace_id: $wid}) "
+                    "MATCH (a:Element {workspace_id: $wid})-[r]->(b:Element {id: $id, workspace_id: $wid}) "
                     "RETURN a.id AS src, type(r) AS rtype, b.id AS tgt, "
                     "       r.confidence AS conf, r.evidence AS ev"
                 )
@@ -247,13 +247,13 @@ class Neo4jGraphStore(IGraphStore):
         try:
             if rel_type is not None:
                 query = (
-                    f"MATCH (a:Element {{id: $id, workspace_id: $wid}})-[r:{rel_type.value}]->(b:Element) "
+                    f"MATCH (a:Element {{id: $id, workspace_id: $wid}})-[r:{rel_type.value}]->(b:Element {{workspace_id: $wid}}) "
                     f"RETURN a.id AS src, type(r) AS rtype, b.id AS tgt, "
                     f"       r.confidence AS conf, r.evidence AS ev"
                 )
             else:
                 query = (
-                    "MATCH (a:Element {id: $id, workspace_id: $wid})-[r]->(b:Element) "
+                    "MATCH (a:Element {id: $id, workspace_id: $wid})-[r]->(b:Element {workspace_id: $wid}) "
                     "RETURN a.id AS src, type(r) AS rtype, b.id AS tgt, "
                     "       r.confidence AS conf, r.evidence AS ev"
                 )
@@ -319,7 +319,7 @@ class Neo4jGraphStore(IGraphStore):
     def edge_count(self, workspace_id: str) -> int:
         with self._driver.session(database=self._db) as s:
             result = s.run(
-                "MATCH (a:Element {workspace_id: $wid})-[r]->(b:Element) RETURN count(r) AS cnt",
+                "MATCH (a:Element {workspace_id: $wid})-[r]->(b:Element {workspace_id: $wid}) RETURN count(r) AS cnt",
                 wid=workspace_id,
             )
             return result.single()["cnt"]
