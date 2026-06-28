@@ -1,7 +1,7 @@
-# GraphRAG POC — Procurement Intelligence
+# GraphRAG — Procurement Intelligence Suite
 
-> **Convert procurement documents into a queryable knowledge graph with a professional React UI.**
-> Upload RFP + Risk Sheet + Contract → automated pipeline → interactive graph → traceability lineage → natural language Q&A.
+> **A multi-workspace knowledge graph platform for procurement document analysis.**
+> Each workspace is an isolated analysis environment. Upload RFP + Risk Sheet + Contract → automated pipeline → interactive graph → traceability lineage → natural language Q&A.
 
 ---
 
@@ -21,7 +21,7 @@
 
 ## What This Does
 
-This POC proves that procurement document intelligence can be fully automated using a production-grade knowledge graph pipeline.
+The platform lets analysts run multiple independent procurement analyses side-by-side — each in its own workspace with fully isolated graph data, vector indexes, and pipeline state.
 
 | Input | Output |
 |-------|--------|
@@ -29,7 +29,7 @@ This POC proves that procurement document intelligence can be fully automated us
 | Risk Sheet (PDF or DOCX) | Typed `Risk` + `Mitigation` nodes |
 | Contract / Offer (PDF or DOCX) | Typed `Clause` + `LD` nodes |
 
-All nodes land in **Neo4j**. Typed edges (`COVERS`, `INTRODUCES_RISK`, `MITIGATED_BY`, `LINKED_TO_LD`, …) connect them across documents. You can then:
+All nodes land in **Neo4j**, scoped to the workspace. Typed edges (`COVERS`, `INTRODUCES_RISK`, `MITIGATED_BY`, `LINKED_TO_LD`, …) connect them across documents. Within each workspace you can:
 
 - Watch a real-time animated pipeline process your documents step by step
 - Explore an interactive force-directed knowledge graph — drag nodes freely, zoom, expand neighbourhoods
@@ -41,35 +41,46 @@ All nodes land in **Neo4j**. Typed edges (`COVERS`, `INTRODUCES_RISK`, `MITIGATE
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  React Frontend  (Vite · TypeScript · React Flow · d3-force) │
-│  localhost:5173                                               │
-│                                                               │
-│  Landing → Upload → Graph → Traceability → Chat              │
-└────────────────────────┬─────────────────────────────────────┘
-                         │ HTTP + SSE (streaming)
-┌────────────────────────▼─────────────────────────────────────┐
-│  FastAPI Backend  (uvicorn · localhost:8000)                  │
-│                                                               │
-│  POST /api/pipeline/run    — SSE streaming pipeline (5 steps)│
-│  GET  /api/graph/data      — React Flow nodes + edges        │
-│  GET  /api/graph/subgraph  — 1-hop neighbourhood expand      │
-│  GET  /api/traceability/*  — coverage + chain                │
-│  POST /api/chat/ask        — intent-aware Q&A                │
-│  GET  /api/elements        — all elements (for preload)      │
-│  GET  /api/debug/edges     — edge diagnostics by type        │
-└───┬──────────────┬──────────────────────────────────────────-┘
-    │              │
-┌───▼───┐      ┌───▼──────────────────────────────────────────┐
-│Neo4j  │      │  Python Services                             │
-│:7687  │      │  DocumentService  → PDFParser/DOCXParser     │
-└───────┘      │                     → LLMExtractor → GPT-4o  │
-               │  GraphService     → Neo4j + Qdrant           │
-┌───────┐      │  QAService        → Graph + Vector + LLM     │
-│Qdrant │      └──────────────────────────────────────────────┘
-│:6333  │
-└───────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  React Frontend  (Vite · TypeScript · React Router v7)               │
+│  localhost:5173                                                        │
+│                                                                        │
+│  /                  → Workspace Grid (create / open / delete)         │
+│  /workspace/:id     → Workspace App (Ingest · Graph · Traceability    │
+│                                       Elements · Chat)                 │
+└────────────────────────────┬─────────────────────────────────────────┘
+                             │ HTTP + SSE (streaming)
+┌────────────────────────────▼─────────────────────────────────────────┐
+│  FastAPI Backend  (uvicorn · localhost:8000)                          │
+│                                                                        │
+│  GET/POST /api/workspaces                    — workspace CRUD         │
+│  POST /api/workspaces/{id}/pipeline/run      — SSE streaming pipeline │
+│  GET  /api/workspaces/{id}/graph/data        — React Flow nodes+edges │
+│  GET  /api/workspaces/{id}/graph/subgraph    — 1-hop neighbourhood    │
+│  GET  /api/workspaces/{id}/traceability/*    — coverage + chain       │
+│  POST /api/workspaces/{id}/chat/ask          — intent-aware Q&A       │
+│  GET  /api/workspaces/{id}/elements          — all elements           │
+└───┬──────────────┬──────────────┬────────────────────────────────────┘
+    │              │              │
+┌───▼───┐      ┌───▼──────┐  ┌───▼─────────────────────────────────┐
+│Neo4j  │      │ Qdrant   │  │  PostgreSQL                         │
+│:7687  │      │ :6333    │  │  :5432                              │
+│       │      │          │  │  workspaces (id, name, desc,        │
+│ Per-  │      │ Per-     │  │  created_at, updated_at)            │
+│ work- │      │ workspace│  └─────────────────────────────────────┘
+│ space │      │ ws_{id}  │
+│ nodes │      │          │
+└───────┘      └──────────┘
 ```
+
+### Workspace isolation
+
+| Layer | Isolation mechanism |
+|-------|-------------------|
+| **PostgreSQL** | One row per workspace — metadata only |
+| **Neo4j** | Composite unique constraint `(id, workspace_id) IS UNIQUE` on `Element` nodes; all queries filter by `workspace_id` |
+| **Qdrant** | Separate collection per workspace: `ws_{workspace_id}` |
+| **Pipeline** | Per-workspace coordinator and write lock — concurrent runs in the same workspace are serialised; different workspaces run fully in parallel |
 
 ### Pipeline — five steps
 
@@ -89,13 +100,15 @@ All nodes land in **Neo4j**. Typed edges (`COVERS`, `INTRODUCES_RISK`, `MITIGATE
                   Every element carries: section, page_number, source (accurate section ref)
                   IDs are doc-scoped: RFP1_REQ_001, CONT_CL_001 — prevents Neo4j collisions
 
-3  Build Graph    Cross-document relationship extraction (second LLM call, all elements)
+3  Build Graph    Cross-document relationship extraction (coordinator pattern):
+                  If multiple pipelines finish extraction at the same time, they share
+                  a single combined LLM call — so no cross-document relationships are
+                  missed because two uploads ran concurrently.
                   → COVERS / PARTIALLY_COVERS / INTRODUCES_RISK /
                      MITIGATED_BY / LINKED_TO_LD / CONTRADICTS
-                  Written into Neo4j with Cypher MERGE (idempotent)
-                  Elements stored with section as top-level indexed Neo4j property
+                  Written into Neo4j with Cypher MERGE (idempotent, workspace-scoped)
 
-4  Index Vectors  BGE-M3 embeddings of all elements → Qdrant
+4  Index Vectors  BGE-M3 embeddings of all elements → workspace Qdrant collection
                   Payload includes: section, page_number — enables section-scoped search
                   Powers semantic Q&A retrieval
 
@@ -107,15 +120,14 @@ All nodes land in **Neo4j**. Typed edges (`COVERS`, `INTRODUCES_RISK`, `MITIGATE
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React 18 · TypeScript · Vite · React Flow v12 · d3-force · Tailwind CSS · Framer Motion |
+| Frontend | React 18 · TypeScript · Vite · React Router v7 · React Flow v12 · d3-force · Tailwind CSS · Framer Motion |
 | API | FastAPI · uvicorn · SSE streaming |
 | LLM extraction | GPT-4o (OpenAI function calling — structured output) |
-| Graph store | Neo4j 5.x (Cypher MERGE, typed edges, uniqueness constraints, section index) |
-| Vector store | Qdrant (section + page_number in payload) |
+| Graph store | Neo4j 5.x (Cypher MERGE, typed edges, composite workspace constraint) |
+| Vector store | Qdrant (per-workspace collections) |
 | Embeddings | BAAI/bge-m3 (sentence-transformers, 1024-dim) |
+| Workspace metadata | PostgreSQL 16 (via psycopg2) |
 | OCR | Tesseract 5.x + pytesseract + PyMuPDF rendering (scanned PDF fallback) |
-
-> **Graphiti has been removed from the active pipeline.** The `graphiti_memory.py` module is kept in the codebase for reference but is not called during document ingestion. It added 30–120 seconds per document (GPT-4o on every page) with no benefit to coverage or traceability queries.
 
 ---
 
@@ -138,14 +150,9 @@ brew install tesseract
 
 # Ubuntu / Debian
 sudo apt-get install tesseract-ocr
-
-# Windows (WSL2)
-sudo apt-get install tesseract-ocr
 ```
 
 > Tesseract is only needed if you upload scanned PDFs (image-based, no embedded text layer). Digital PDFs and DOCX files work without it.
-
-> macOS and Linux tested. Windows works via WSL2 with Docker Desktop.
 
 ### API keys
 
@@ -153,12 +160,13 @@ sudo apt-get install tesseract-ocr
 |---------|----------------|-----------|
 | **OpenAI** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | **Yes** — GPT-4o for extraction and Q&A |
 
-> GPT-4o costs approximately **$0.02–0.15 per document** (element extraction + cross-document relationship extraction). Scanned PDFs with many pages produce more chunks and cost slightly more.
+> GPT-4o costs approximately **$0.02–0.15 per document** (element extraction + cross-document relationship extraction).
 
 ### Ports that must be free
 
 | Port | Used by |
 |------|--------|
+| `5432` | PostgreSQL (workspace metadata) |
 | `7474` | Neo4j browser (optional debug UI) |
 | `7687` | Neo4j Bolt |
 | `6333` | Qdrant REST |
@@ -190,7 +198,7 @@ Open `backend/.env` and fill in:
 OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxx
 ```
 
-Everything else has working defaults.
+Everything else has working defaults that match the docker-compose services.
 
 ### 3 — Install Tesseract (for scanned PDFs)
 
@@ -199,16 +207,16 @@ brew install tesseract   # macOS
 # or: sudo apt-get install tesseract-ocr
 ```
 
-### 4 — Start Neo4j and Qdrant
+### 4 — Start all backing services
 
 ```bash
 docker compose up -d
 ```
 
-Wait ~20 seconds, then verify:
+This starts **Neo4j**, **Qdrant**, and **PostgreSQL** in one command. Wait ~20 seconds, then verify:
 
 ```bash
-docker compose ps   # both should show "healthy" or "running"
+docker compose ps   # all three should show "healthy" or "running"
 ```
 
 > **Neo4j browser** is at http://localhost:7474 (user: `neo4j`, password: `password`).
@@ -267,8 +275,12 @@ NEO4J_DATABASE=neo4j
 # ── Qdrant ──────────────────────────────────────────────────────────────────
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
-QDRANT_COLLECTION=graphrag_elements
-# QDRANT_API_KEY=                 # Only needed for Qdrant Cloud
+QDRANT_COLLECTION=graphrag_elements   # Base name — per-workspace: ws_{id}
+# QDRANT_API_KEY=                     # Only needed for Qdrant Cloud
+
+# ── PostgreSQL (workspace metadata) ─────────────────────────────────────────
+POSTGRES_URL=postgresql://graphrag:graphrag@localhost:5432/graphrag
+# Credentials match docker-compose.yml — change all three places if you update them
 
 # ── Embeddings ───────────────────────────────────────────────────────────────
 EMBEDDING_MODEL=BAAI/bge-m3       # Change to all-MiniLM-L6-v2 for faster dev
@@ -298,100 +310,103 @@ EMBEDDING_DIMENSION=384
 ```
 GraphRAG POC/
 │
-├── backend/                        ← All Python (FastAPI + services + graph)
+├── backend/                          ← All Python (FastAPI + services + graph)
 │   ├── api/
-│   │   ├── main.py                 ← FastAPI app, CORS, router registration
-│   │   ├── deps.py                 ← Singleton service instances
+│   │   ├── main.py                   ← FastAPI app, CORS, router registration, Postgres init
+│   │   ├── deps.py                   ← Singleton/per-workspace service factory + cache
 │   │   └── routes/
-│   │       ├── pipeline.py         ← POST /api/pipeline/run  (SSE stream, 5 steps)
-│   │       ├── graph.py            ← GET  /api/graph/data|subgraph|stats
-│   │       ├── traceability.py     ← GET  /api/traceability/coverage|chain
-│   │       ├── chat.py             ← POST /api/chat/ask
-│   │       └── status.py           ← GET/POST /api/status|reset|elements|debug/edges
+│   │       ├── workspaces.py         ← CRUD /api/workspaces (Postgres-backed)
+│   │       ├── pipeline.py           ← POST /api/workspaces/{id}/pipeline/run  (SSE)
+│   │       ├── graph.py              ← GET  /api/workspaces/{id}/graph/*
+│   │       ├── traceability.py       ← GET  /api/workspaces/{id}/traceability/*
+│   │       ├── chat.py               ← POST /api/workspaces/{id}/chat/ask
+│   │       └── status.py             ← GET/POST /api/workspaces/{id}/status|reset|elements
 │   │
 │   ├── config/
-│   │   └── settings.py             ← All env vars as a frozen dataclass
+│   │   └── settings.py               ← All env vars as a frozen dataclass
 │   │
-│   ├── core/                       ← Pure domain — no I/O, no framework deps
-│   │   ├── models.py               ← AtomicElement, Relationship, ParsedDocument, CoverageResult
-│   │   │                              AtomicElement.metadata carries section + page_number
-│   │   ├── interfaces.py           ← IParser, IExtractor, IGraphStore, IVectorStore (ABCs)
-│   │   └── exceptions.py           ← Typed exception hierarchy
+│   ├── db/
+│   │   └── postgres.py               ← Workspace CRUD (psycopg2, sync, wrapped in to_thread)
+│   │                                    init_db, list_workspaces, get_workspace,
+│   │                                    create_workspace, update_workspace, delete_workspace
 │   │
-│   ├── parsers/                    ← Text extraction only
-│   │   ├── pdf_parser.py           ← Two-pass: native PyMuPDF text → Tesseract OCR fallback
-│   │   │                              Non-ASCII ratio filter drops garbled CJK pages
-│   │   └── docx_parser.py          ← python-docx
+│   ├── core/                         ← Pure domain — no I/O, no framework deps
+│   │   ├── models.py                 ← AtomicElement, Relationship, ParsedDocument, CoverageResult
+│   │   ├── interfaces.py             ← IParser, IExtractor, IGraphStore, IVectorStore (ABCs)
+│   │   └── exceptions.py             ← Typed exception hierarchy
+│   │
+│   ├── parsers/
+│   │   ├── pdf_parser.py             ← Two-pass: native PyMuPDF → Tesseract OCR fallback
+│   │   └── docx_parser.py
 │   │
 │   ├── extractors/
-│   │   └── llm_extractor.py        ← Section-aware chunking (_chunk_pages)
-│   │                                  Detects Section X / 3.1.2 / APPENDIX A / GCC 6.1 headers
-│   │                                  Prefixes chunks with [Section | Page N] for LLM context
-│   │                                  GPT-4o function calling → AtomicElement + Relationship
-│   │                                  Two passes: per-doc element extraction, then cross-doc rels
+│   │   └── llm_extractor.py          ← Section-aware chunking → GPT-4o extraction
 │   │
 │   ├── graph/
-│   │   ├── neo4j_store.py          ← IGraphStore on Neo4j (Cypher MERGE / MATCH)
-│   │   │                              section stored as top-level indexed property
-│   │   ├── graphiti_memory.py      ← Graphiti episodic memory (unused — kept for reference)
-│   │   ├── builder.py              ← GraphBuilder: build, assess_coverage, traceability chain
-│   │   └── visualizer.py           ← Legacy PyVis generator (unused in React UI)
+│   │   ├── neo4j_store.py            ← IGraphStore; composite (id, workspace_id) constraint
+│   │   ├── builder.py                ← GraphBuilder: build, assess_coverage, traceability chain
+│   │   └── visualizer.py             ← Legacy PyVis generator (unused in React UI)
 │   │
 │   ├── vector/
-│   │   ├── embedder.py             ← BGEEmbedder (lazy-loads BAAI/bge-m3)
-│   │   └── qdrant_store.py         ← IVectorStore on Qdrant
-│   │                                  Payload includes: section, page_number
-│   │                                  search_by_type accepts optional section= filter
+│   │   ├── embedder.py               ← BGEEmbedder singleton (lazy-loads BAAI/bge-m3)
+│   │   └── qdrant_store.py           ← Per-workspace collection (ws_{workspace_id})
 │   │
-│   ├── services/                   ← Orchestration — the only layer the API talks to
-│   │   ├── document_service.py     ← parse + per-doc extract + cross-doc relationship extraction
-│   │   ├── graph_service.py        ← Neo4j + Qdrant build pipeline
-│   │   └── qa_service.py           ← intent detection → evidence → GPT-4o synthesis
+│   ├── services/
+│   │   ├── document_service.py       ← parse + extract + coordinator cross-doc rels
+│   │   ├── graph_service.py          ← Workspace-scoped Neo4j + Qdrant orchestration
+│   │   └── qa_service.py             ← Intent detection → evidence → GPT-4o synthesis
 │   │
-│   ├── requirements.txt            ← Includes pytesseract + Pillow for OCR
-│   ├── .env                        ← Secrets (gitignored — copy from .env.example)
+│   ├── requirements.txt
+│   ├── .env                          ← Secrets (gitignored — copy from .env.example)
 │   └── .env.example
 │
-├── frontend/                       ← React + Vite + TypeScript
+├── frontend/                         ← React + Vite + TypeScript
 │   ├── src/
-│   │   ├── App.tsx                 ← Tab navigation, global state, preload on resume
-│   │   ├── types.ts                ← Shared TypeScript types incl. ChainElement, EvidenceItem
-│   │   ├── index.css               ← Tailwind + custom dark theme
+│   │   ├── main.tsx                  ← BrowserRouter wrapper
+│   │   ├── App.tsx                   ← Route definitions only (React Router v7)
+│   │   ├── types.ts                  ← Shared TypeScript types
+│   │   ├── index.css                 ← Tailwind + custom dark theme
 │   │   ├── api/
-│   │   │   └── client.ts           ← fetch wrappers + SSE stream reader
+│   │   │   └── client.ts             ← fetch wrappers + SSE reader; all calls take workspaceId
+│   │   ├── pages/
+│   │   │   ├── WorkspacesPage.tsx    ← / → workspace grid, create, delete
+│   │   │   └── WorkspacePage.tsx     ← /workspace/:id → full analysis app (keep-alive tabs)
 │   │   └── components/
-│   │       ├── LandingPage.tsx     ← Full-screen landing: Launch / Resume Session
-│   │       ├── UploadZone.tsx      ← Dropzone + pipeline SSE trigger
-│   │       ├── PipelineProgress.tsx← Animated step cards with live progress bars
-│   │       ├── KnowledgeGraph.tsx  ← React Flow + d3-force layout, custom nodes, edge highlighting
-│   │       ├── ElementsTable.tsx   ← Filterable/sortable elements table
-│   │       ├── TraceabilityView.tsx← 4-column card layout with inter/intra document badges
-│   │       └── ChatWindow.tsx      ← Floating chat + evidence source cards (collapsible)
+│   │       ├── WorkflowPanel.tsx     ← Dropzone + pipeline SSE trigger
+│   │       ├── KnowledgeGraph.tsx    ← React Flow + d3-force, custom nodes, edge highlighting
+│   │       ├── ElementsTable.tsx     ← Filterable/sortable elements table
+│   │       ├── TraceabilityView.tsx  ← 4-column card layout with inter/intra badges
+│   │       └── ChatWindow.tsx        ← Floating chat + evidence source cards (collapsible)
 │   ├── package.json
-│   └── vite.config.ts              ← Proxies /api → localhost:8000
+│   └── vite.config.ts                ← Proxies /api → localhost:8000
 │
-├── Data_Samples/                   ← Sample procurement documents for testing
-├── .venv/                          ← Python virtual environment (gitignored)
+├── Data_Samples/                     ← Sample procurement documents for testing
+├── .venv/                            ← Python virtual environment (gitignored)
 ├── .gitignore
-├── docker-compose.yml              ← Neo4j 5.x + Qdrant
-├── start_api.sh                    ← cd backend && uvicorn api.main:app
-└── start_frontend.sh               ← cd frontend && npm run dev
+├── docker-compose.yml                ← Neo4j 5.x + Qdrant + PostgreSQL 16
+├── start_api.sh                      ← cd backend && uvicorn api.main:app
+└── start_frontend.sh                 ← cd frontend && npm run dev
 ```
 
 ---
 
 ## UI Walkthrough
 
-### Landing page
+### Workspace grid (`/`)
 
-Opening the app shows a full-screen landing page. Two states:
+The app opens to a card grid of all your workspaces (stored in PostgreSQL). From here you can:
 
-- **No data** — "Launch App →" button, feature overview
-- **Data present** — "Resume Session →" with live node/edge/type counts and a green dot. Graph tab loads automatically on resume.
+- **Create workspace** — name + optional description → creates an isolated Neo4j/Qdrant scope
+- **Open workspace** — click any card to enter that workspace's analysis environment
+- **Delete workspace** — confirm dialog; removes all Neo4j nodes, Qdrant collection, and Postgres row for that workspace
 
-Click the logo in the header at any time to return to the landing page.
+### Workspace app (`/workspace/:id`)
 
-### Upload tab
+Five tabs — Ingest · Elements · Graph · Traceability · Chat. Tabs are kept alive (CSS show/hide, not remount) so switching tabs doesn't reload the graph or lose chat history. The URL updates to `/workspace/:id/:tab` so deep links and back/forward work correctly.
+
+A **Back** button returns to the workspace grid without losing any data.
+
+#### Ingest tab
 
 Drop PDF or DOCX files. Name them with keywords for automatic document-type detection:
 
@@ -401,23 +416,13 @@ Drop PDF or DOCX files. Name them with keywords for automatic document-type dete
 | `risk`, `rmc`, `register` | Risk Sheet → extracts `Risk` + `Mitigation` |
 | `contract`, `offer`, `agreement` | Contract → extracts `Clause` + `LD` |
 
-Click **Run Pipeline**. The five steps stream live with progress messages:
+Click **Run Pipeline**. The five steps stream live. Re-uploading the same file is safe — SHA-256 dedup skips it silently.
 
-| Step | What happens |
-|------|-------------|
-| 📄 Parse Documents | SHA-256 dedup skips unchanged files. Digital PDFs extract natively; **scanned PDFs are OCR'd with Tesseract** (page-by-page, ~0.5–1s per page). |
-| 🔍 Extract Elements (LLM) | Section headers detected per page → chunks prefixed with section context → GPT-4o extracts elements with accurate section + page attribution. IDs prefixed per doc (`RFP1_REQ_001`). |
-| 🕸️ Build Knowledge Graph | Second LLM call sends all elements together → infers cross-document relationships → written to Neo4j with `section` as an indexed property. |
-| 🔢 Index Semantic Vectors | BGE-M3 embeddings upserted to Qdrant. Payload includes `section` and `page_number` for future section-scoped queries. |
-| 📊 Assess Coverage | Graph traversal per Requirement → Covered / Partially Covered / Not Covered. |
+#### Elements tab
 
-Re-uploading the same file is safe — the SHA-256 hash check skips it silently.
+Filterable table of all extracted elements in this workspace. Filter by type pill, search by text, sort any column, expand a row for full content.
 
-### Elements tab
-
-Filterable table of all extracted elements. Filter by type pill, search by text, sort any column, expand a row for full content.
-
-### Graph tab
+#### Graph tab
 
 Interactive knowledge graph powered by **React Flow + d3-force**:
 
@@ -430,48 +435,18 @@ Interactive knowledge graph powered by **React Flow + d3-force**:
 | Purple | LD (Liquidated Damages) |
 | Slate | Document |
 
-**Controls:**
-- **Drag** nodes freely to rearrange
-- **Scroll** to zoom in/out
-- **Click** a node to highlight its connected edges (others dim to 10% opacity) and show a detail panel
-- **Double-click** a node to expand its 1-hop neighbourhood into the current view
-- **Force / Hierarchy** toggle in toolbar switches between d3-force (organic) and dagre LR (structured) layout
-- **Explore** input: type any node ID to load just its subgraph
+- **Click** a node to highlight its connected edges and show a detail panel
+- **Double-click** a node to expand its 1-hop neighbourhood
+- **Force / Hierarchy** toggle switches between d3-force and dagre LR layout
 - **CONTAINS** toggle: show/hide Document→Element containment edges
-- **Refresh** button: re-runs the current layout from scratch
 
-### Traceability tab
+#### Traceability tab
 
-Left panel lists every Requirement with its coverage badge (Covered / Partial / Not Covered) and counts of linked clauses and risks. Click a requirement to open its traceability breakdown:
+Left panel lists every Requirement with its coverage badge. Click a requirement to open its breakdown across four columns — Clauses · Risks · Mitigations · LDs — with **INTER** (cross-document) and **INTRA** (same-document) badges per element.
 
-**Four columns** — Clauses · Risks · Mitigations · LDs
+#### Chat
 
-Each card shows:
-- Element ID and type badge
-- Text preview (click to expand full text)
-- Relationship label (`COVERS`, `INTRODUCES_RISK`, etc.)
-- **↔ INTER** badge (blue) — element is from a different document than the requirement
-- **↕ INTRA** badge (slate) — element is from the same document
-- Source reference in small monospace (now shows exact section, e.g. `Section 5. Terms of Reference`)
-
-Below the columns: inter-document vs intra-document summary counts, and a red gap alert if any risks have no mitigation or no LD.
-
-### Chat (floating bubble, bottom-right)
-
-Ask anything in plain English. The backend classifies intent and picks the right evidence strategy:
-
-| Question pattern | Strategy |
-|-----------------|---------|
-| "not covered", "gap", "missing coverage" | Cypher traversal → uncovered Requirements |
-| "risk" + "partial" | Cypher traversal → risks on partially-covered Requirements |
-| "no mitigation", "unmitigated" | Graph traversal → Risks without MITIGATED_BY edge |
-| "no ld", "no penalty" | Graph traversal → Risks without LINKED_TO_LD edge |
-| Everything else | BGE-M3 vector search → relevant elements → GPT-4o synthesis |
-
-Each answer shows:
-- **Query type tag** — which strategy was used
-- **Concise prose answer** — 2–4 sentences, no inline element IDs
-- **Collapsible source cards** — numbered, coloured by element type, shows section + source reference
+Floating bubble (bottom-right). Intent-aware Q&A using Cypher graph traversal + BGE-M3 semantic search. Each answer shows the query strategy used and collapsible source cards.
 
 ---
 
@@ -496,47 +471,30 @@ In `backend/services/qa_service.py`:
 2. Add a `_gather_<intent>_evidence()` method
 3. Map the new intent in `answer()`
 
-In `frontend/src/components/ChatWindow.tsx` add the label to `QUERY_TYPE`.
-
-### Swapping Neo4j for another graph store
-
-1. Create `backend/graph/your_store.py` implementing `IGraphStore` from `core/interfaces.py`
-2. Swap the import in `backend/graph/__init__.py`
-3. Change `Neo4jGraphStore()` to `YourStore()` in `backend/services/graph_service.py`
-
 ### Useful debug endpoints
 
 | URL | What it shows |
 |-----|--------------|
 | http://localhost:7474 | Neo4j Browser — run Cypher directly |
 | http://localhost:6333/dashboard | Qdrant dashboard |
-| http://localhost:8000/docs | FastAPI auto-generated Swagger UI |
-| http://localhost:8000/api/status | Current graph node/edge counts |
-| http://localhost:8000/api/debug/edges | All edges grouped by relationship type — diagnose if COVERS/INTRODUCES_RISK etc. are being written |
+| http://localhost:8000/docs | FastAPI Swagger UI |
+| http://localhost:8000/api/workspaces | List all workspaces |
+| http://localhost:8000/api/workspaces/{id}/status | Node/edge counts for a workspace |
 
-**Useful Cypher for Neo4j Browser:**
+**Useful Cypher for Neo4j Browser** (replace `<workspace_id>` with actual ID from Postgres):
 
 ```cypher
-// All semantic edges (excludes CONTAINS)
+// All elements in a workspace
+MATCH (e:Element {workspace_id: '<workspace_id>'})
+RETURN e.id, e.type, e.section ORDER BY e.type
+
+// All semantic edges in a workspace
 MATCH (a)-[r]->(b)
-WHERE type(r) <> 'CONTAINS'
-RETURN a.id, type(r), b.id, r.confidence
-ORDER BY type(r)
-
-// Count edges by type
-MATCH ()-[r]->() RETURN type(r) AS rel, count(r) AS n ORDER BY n DESC
-
-// Elements by section (new — section is now an indexed property)
-MATCH (e:Element {section: 'Section 5. Terms of Reference'})
-RETURN e.id, e.type, e.text
-ORDER BY e.type
-
-// Trace a requirement — adjust ID to match actual prefixed format
-MATCH path = (req:Element {id: 'RFP1_REQ_001'})-[*1..3]-(related)
-RETURN path
+WHERE type(r) <> 'CONTAINS' AND a.workspace_id = '<workspace_id>'
+RETURN a.id, type(r), b.id, r.confidence ORDER BY type(r)
 
 // Uncovered requirements
-MATCH (req:Element {type: 'Requirement'})
+MATCH (req:Element {type: 'Requirement', workspace_id: '<workspace_id>'})
 WHERE NOT (req)<-[:COVERS]-() AND NOT (req)<-[:PARTIALLY_COVERS]-()
 RETURN req.id, req.text, req.section
 ```
@@ -547,42 +505,28 @@ RETURN req.id, req.text, req.section
 
 ### Coverage shows "Not Covered" for everything
 
-The cross-document relationship extraction runs as the second LLM call inside the "Build Knowledge Graph" step. Check:
+1. Open http://localhost:8000/api/workspaces/{id}/status and check edge counts.
+2. Check backend logs for `"Found X cross-document relationships"`. If `X = 0`, lower `CONFIDENCE_THRESHOLD=0.4` and re-upload.
+3. Use the workspace **Wipe DB** button, then re-upload all documents.
 
-1. **Confirm edges exist** — open http://localhost:8000/api/debug/edges and look for `COVERS` in the summary. If the summary only shows `CONTAINS`, relationships aren't being generated.
+### "Could not initialize PostgreSQL" warning on startup
 
-2. **Check the backend logs** — look for `"Found X cross-document relationships"`. If `X = 0`, the LLM isn't generating any above the confidence threshold.
+Docker Compose wasn't started first, or Postgres isn't healthy yet.
 
-3. **Lower the threshold** — in `backend/.env` set `CONFIDENCE_THRESHOLD=0.4` and re-run after resetting.
-
-4. **Reset and re-upload** — hit the **Wipe DB** button in the header (or `POST /api/reset`), then re-upload all documents. The graph is rebuilt from scratch each run.
-
-5. **Check element IDs** — element IDs are now doc-prefixed (`RFP1_REQ_001`, `CONT_CL_001`). If old IDs without prefixes are in Neo4j from a previous run, reset the graph first.
+```bash
+docker compose up -d
+docker compose ps   # confirm postgres shows "healthy"
+```
 
 ### Scanned PDF extracts nothing
 
-1. **Check Tesseract is installed:**
-   ```bash
-   tesseract --version
-   ```
-   If not found: `brew install tesseract` (macOS) or `sudo apt-get install tesseract-ocr`.
-
-2. **Check backend logs** for lines like:
-   ```
-   Parsed 'rfp.pdf': 146 pages (146 via OCR, 0 skipped)
-   ```
-   If `total_pages = 0`, Tesseract isn't being called or all pages are being filtered.
-
-3. **High non-ASCII ratio filter** — pages where > 40% of OCR output is non-ASCII are dropped. This catches garbled CJK pages but may also drop pages with many special characters. Adjust `non_ascii_threshold` in `PDFParser.__init__` if needed.
-
-4. **Performance** — Tesseract OCR runs at ~0.5–1s per page. A 146-page document takes ~2 minutes to OCR. This happens during the "Extract Elements" step.
+Check Tesseract: `tesseract --version`. If not found: `brew install tesseract` (macOS) or `sudo apt-get install tesseract-ocr`.
 
 ### "Neo4j: Connection refused"
 
 ```bash
-docker compose ps          # check status
-docker compose logs neo4j  # check for errors
-docker compose up -d       # restart
+docker compose up -d
+docker compose logs neo4j
 ```
 
 Wait ~20 seconds after starting.
@@ -591,19 +535,12 @@ Wait ~20 seconds after starting.
 
 ```bash
 cp backend/.env.example backend/.env
-# then open backend/.env and set OPENAI_API_KEY=sk-proj-...
+# open backend/.env and set OPENAI_API_KEY=sk-proj-...
 ```
 
 ### BGE-M3 download slow / fails
 
-```bash
-.venv/bin/python3 -c "
-from sentence_transformers import SentenceTransformer
-SentenceTransformer('BAAI/bge-m3')
-"
-```
-
-Or switch to a smaller model:
+Switch to a smaller model for development:
 
 ```env
 EMBEDDING_MODEL=all-MiniLM-L6-v2
@@ -612,23 +549,22 @@ EMBEDDING_DIMENSION=384
 
 ### Frontend can't reach the API
 
-Make sure FastAPI is running on port 8000. Vite proxies `/api/*` → `localhost:8000` (see `frontend/vite.config.ts`).
-
 ```bash
-curl http://localhost:8000/health   # should return {"status":"ok"}
+curl http://localhost:8000/health   # should return {"status":"ok","service":"graphrag-api"}
 ```
+
+Make sure FastAPI is running. Vite proxies `/api/*` → `localhost:8000`.
 
 ### "No Requirements found" in Traceability
 
-Document type is inferred from the filename. If your RFP isn't named with `rfp`, `rfx`, or `tender`, GPT-4o extracts Clauses instead of Requirements.
-
-Fix: rename the file (e.g. `rfp_project.pdf`), click **Wipe DB**, then re-upload.
+Document type is inferred from the filename. Rename the RFP to include `rfp` (e.g. `rfp_project.pdf`), use the workspace **Wipe DB** button, then re-upload.
 
 ### Port conflicts
 
 ```bash
-lsof -i :8000    # find what's using the API port
-lsof -i :7687    # find what's using Neo4j Bolt
+lsof -i :5432    # Postgres
+lsof -i :8000    # FastAPI
+lsof -i :7687    # Neo4j Bolt
 ```
 
 Edit `docker-compose.yml` to remap ports and update `backend/.env` accordingly.
@@ -641,18 +577,15 @@ Edit `docker-compose.yml` to remap ports and update `backend/.env` accordingly.
 # Stop containers (data preserved in Docker volumes)
 docker compose stop
 
-# Full reset — removes containers and volumes
+# Full reset — removes containers and volumes (all workspaces deleted)
 docker compose down -v
 ```
 
 ---
 
-## Phase 2 — Planned
-
-The current POC covers knowledge extraction and coverage assessment. Phase 2 will add:
+## Roadmap
 
 - **Clause recommendation** — suggest contract clauses for uncovered requirements
 - **Offer generation** — draft a response offer using traced clauses as templates
 - **Gap remediation** — auto-suggest mitigations for unmitigated risks
-
-These build directly on the graph constructed in Phase 1.
+- **Workspace sharing** — invite collaborators to a workspace

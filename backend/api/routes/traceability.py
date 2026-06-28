@@ -1,21 +1,20 @@
-"""Coverage and traceability endpoints."""
+"""Coverage and traceability endpoints — workspace-scoped."""
 from __future__ import annotations
 
-from dataclasses import asdict
+import asyncio
 
 from fastapi import APIRouter, HTTPException
 
 from api.deps import get_graph_service
 
-router = APIRouter(prefix="/api/traceability")
+router = APIRouter(prefix="/api/workspaces/{workspace_id}/traceability")
 
 
 @router.get("/coverage")
-def get_coverage() -> dict:
-    """Return coverage results for all requirements."""
-    gs = get_graph_service()
+async def get_coverage(workspace_id: str) -> dict:
+    gs = get_graph_service(workspace_id)
     try:
-        results = gs.get_coverage_results()
+        results = await asyncio.to_thread(gs.get_coverage_results)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -37,15 +36,13 @@ def get_coverage() -> dict:
 
 
 @router.get("/chain/{req_id}")
-def get_chain(req_id: str) -> dict:
-    """Return the full traceability chain for requirement *req_id*."""
-    gs = get_graph_service()
+async def get_chain(workspace_id: str, req_id: str) -> dict:
+    gs = get_graph_service(workspace_id)
     try:
-        chain = gs.get_traceability(req_id)
+        chain = await asyncio.to_thread(gs.get_traceability, req_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     if not chain:
         raise HTTPException(status_code=404, detail=f"Requirement '{req_id}' not found")
-
     return chain

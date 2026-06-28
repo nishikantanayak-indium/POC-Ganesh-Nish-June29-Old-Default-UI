@@ -1,43 +1,36 @@
-"""Graph data endpoints — returns nodes/edges for React Flow rendering."""
+"""Graph data endpoints — workspace-scoped."""
 from __future__ import annotations
+
+import asyncio
 
 from fastapi import APIRouter, HTTPException
 
 from api.deps import get_graph_service
 
-router = APIRouter(prefix="/api/graph")
+router = APIRouter(prefix="/api/workspaces/{workspace_id}/graph")
 
 
 @router.get("/data")
-def get_graph_data(show_contains: bool = False) -> dict:
-    """
-    Return the full graph in React-Flow-compatible format.
-
-    Query params:
-        show_contains: include CONTAINS edges (default False — too noisy)
-    """
-    gs = get_graph_service()
+async def get_graph_data(workspace_id: str, show_contains: bool = False) -> dict:
+    gs = get_graph_service(workspace_id)
     try:
-        raw = gs.store.get_graph_for_visualization()
+        raw = await asyncio.to_thread(gs.store.get_graph_for_visualization, workspace_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     nodes = raw.get("nodes", [])
     edges = raw.get("edges", [])
-
     if not show_contains:
         edges = [e for e in edges if e.get("rtype") != "CONTAINS"]
-
     return {"nodes": nodes, "edges": edges}
 
 
 @router.get("/subgraph/{node_id}")
-def get_subgraph(node_id: str) -> dict:
-    """Return the ego-network (1-hop neighbourhood) around *node_id*."""
-    gs = get_graph_service()
+async def get_subgraph(workspace_id: str, node_id: str) -> dict:
+    gs = get_graph_service(workspace_id)
     try:
-        rels = gs.store.get_relationships(node_id)
-        center = gs.store.get_element(node_id)
+        rels = await asyncio.to_thread(gs.store.get_relationships, node_id, workspace_id)
+        center = await asyncio.to_thread(gs.store.get_element, node_id, workspace_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -51,36 +44,27 @@ def get_subgraph(node_id: str) -> dict:
 
     nodes = []
     for nid in node_ids:
-        elem = gs.store.get_element(nid)
+        elem = await asyncio.to_thread(gs.store.get_element, nid, workspace_id)
         if elem:
             nodes.append({
-                "id": elem.id,
-                "type": elem.type.value,
-                "text": elem.text,
-                "source": elem.source,
-                "document_id": elem.document_id,
+                "id": elem.id, "type": elem.type.value, "text": elem.text,
+                "source": elem.source, "document_id": elem.document_id,
                 "confidence": elem.confidence,
             })
 
     edges = [
-        {
-            "src": r.source_id,
-            "tgt": r.target_id,
-            "rtype": r.type.value,
-            "conf": r.confidence,
-            "ev": r.evidence,
-        }
+        {"src": r.source_id, "tgt": r.target_id, "rtype": r.type.value,
+         "conf": r.confidence, "ev": r.evidence}
         for r in rels
     ]
-
     return {"nodes": nodes, "edges": edges}
 
 
 @router.get("/stats")
-def get_stats() -> dict:
-    gs = get_graph_service()
+async def get_stats(workspace_id: str) -> dict:
+    gs = get_graph_service(workspace_id)
     return {
-        "nodes": gs.get_node_count(),
-        "edges": gs.get_edge_count(),
-        "type_counts": gs.store.get_type_counts(),
+        "nodes": await asyncio.to_thread(gs.get_node_count),
+        "edges": await asyncio.to_thread(gs.get_edge_count),
+        "type_counts": await asyncio.to_thread(gs.store.get_type_counts, workspace_id),
     }

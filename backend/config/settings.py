@@ -67,6 +67,14 @@ class Settings:
         default_factory=lambda: os.environ.get("NEO4J_DATABASE", "neo4j")
     )
 
+    # --- PostgreSQL (workspace metadata) ---
+    postgres_url: str = field(
+        default_factory=lambda: os.environ.get(
+            "POSTGRES_URL",
+            "postgresql://graphrag:graphrag@localhost:5432/graphrag",
+        )
+    )
+
     # --- Quality thresholds ---
     confidence_threshold: float = field(
         default_factory=lambda: float(os.environ.get("CONFIDENCE_THRESHOLD", "0.5"))

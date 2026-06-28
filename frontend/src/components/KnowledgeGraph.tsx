@@ -177,7 +177,7 @@ function toRFEdges(raw: GraphEdge[]): Edge[] {
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
-export default function KnowledgeGraph({ refreshKey }: { refreshKey: number }) {
+export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceId: string; refreshKey: number }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
   const [loading, setLoading] = useState(true)
@@ -200,7 +200,7 @@ export default function KnowledgeGraph({ refreshKey }: { refreshKey: number }) {
     setLoading(true)
     setError(null)
     try {
-      const data = await fetchGraphData(showContains)
+      const data = await fetchGraphData(workspaceId, showContains)
       const rfNodes = toRFNodes(data.nodes)
       const rfEdges = toRFEdges(data.edges)
       setNodes(applyLayout(rfNodes, rfEdges))
@@ -218,7 +218,7 @@ export default function KnowledgeGraph({ refreshKey }: { refreshKey: number }) {
     if (!subgraphId.trim()) return
     setSubgraphLoading(true)
     try {
-      const data = await fetchSubgraph(subgraphId.trim())
+      const data = await fetchSubgraph(workspaceId, subgraphId.trim())
       const rfNodes = toRFNodes(data.nodes)
       const rfEdges = toRFEdges(data.edges)
       setNodes(applyLayout(rfNodes, rfEdges))
@@ -234,7 +234,7 @@ export default function KnowledgeGraph({ refreshKey }: { refreshKey: number }) {
   const handleNodeDoubleClick = useCallback(async (_event: React.MouseEvent, node: Node) => {
     try {
       const clickedPos = node.position
-      const data = await fetchSubgraph(node.id)
+      const data = await fetchSubgraph(workspaceId, node.id)
       const newRFNodes = toRFNodes(data.nodes).map(n => ({
         ...n,
         position: { x: clickedPos.x + 320, y: clickedPos.y + (Math.random() - 0.5) * 200 },

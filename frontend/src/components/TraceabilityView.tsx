@@ -147,7 +147,7 @@ function InterIntraSummary({ chain }: { chain: TraceabilityChain }) {
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
-export default function TraceabilityView({ coverage }: { coverage: CoverageResult[] }) {
+export default function TraceabilityView({ workspaceId, coverage }: { workspaceId: string; coverage: CoverageResult[] }) {
   const [selected, setSelected] = useState<string | null>(null)
   const [chain, setChain] = useState<TraceabilityChain | null>(null)
   const [loading, setLoading] = useState(false)
@@ -156,7 +156,7 @@ export default function TraceabilityView({ coverage }: { coverage: CoverageResul
     setSelected(reqId)
     setLoading(true)
     try {
-      const c = await fetchChain(reqId)
+      const c = await fetchChain(workspaceId, reqId)
       setChain(c)
     } catch (e) {
       console.error(e)

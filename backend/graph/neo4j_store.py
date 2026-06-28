@@ -1,8 +1,15 @@
 """
-Neo4j-backed graph store for the GraphRAG POC.
+Neo4j-backed graph store — workspace-scoped.
 
-Implements :class:`core.interfaces.IGraphStore` using the official
-neo4j Python driver v5+.  All Cypher is written against Neo4j 5.x syntax.
+Every method that reads or writes Element nodes takes a ``workspace_id``
+parameter so that multiple workspaces can coexist in the same database
+without cross-contamination.
+
+Constraint migration
+--------------------
+On first start the setup routine drops the old single-property ``id``
+uniqueness constraint (if present) and creates a composite
+``(id, workspace_id)`` unique constraint instead.
 """
 
 from __future__ import annotations
@@ -21,17 +28,6 @@ logger = logging.getLogger(__name__)
 
 
 class Neo4jGraphStore(IGraphStore):
-    """
-    Persistent graph store backed by a Neo4j instance.
-
-    A single :class:`~neo4j.Driver` is held for the lifetime of this object;
-    call :meth:`close` (or use as a context manager) when finished.
-    """
-
-    # ------------------------------------------------------------------
-    # Construction / teardown
-    # ------------------------------------------------------------------
-
     def __init__(self) -> None:
         self._driver: Driver = GraphDatabase.driver(
             settings.neo4j_uri,
@@ -41,21 +37,29 @@ class Neo4jGraphStore(IGraphStore):
         self._setup_constraints()
 
     def _setup_constraints(self) -> None:
-        """Create uniqueness constraint and indexes on first run (idempotent)."""
         with self._driver.session(database=self._db) as s:
+            # Drop legacy single-property id constraint if it exists
+            try:
+                result = s.run(
+                    "SHOW CONSTRAINTS WHERE labelsOrTypes = ['Element'] "
+                    "AND properties = ['id'] AND type = 'UNIQUENESS'"
+                )
+                for row in result:
+                    s.run(f"DROP CONSTRAINT `{row['name']}` IF EXISTS")
+            except Exception:
+                pass
+
+            # Composite uniqueness: same element id can exist in different workspaces
             s.run(
-                "CREATE CONSTRAINT IF NOT EXISTS FOR (e:Element) REQUIRE e.id IS UNIQUE"
+                "CREATE CONSTRAINT element_workspace_unique IF NOT EXISTS "
+                "FOR (e:Element) REQUIRE (e.id, e.workspace_id) IS UNIQUE"
             )
-            s.run(
-                "CREATE INDEX IF NOT EXISTS FOR (e:Element) ON (e.type)"
-            )
-            s.run(
-                "CREATE INDEX IF NOT EXISTS FOR (e:Element) ON (e.document_id)"
-            )
-            s.run("CREATE INDEX IF NOT EXISTS FOR (e:Element) ON (e.section)")
+            s.run("CREATE INDEX element_workspace IF NOT EXISTS FOR (e:Element) ON (e.workspace_id)")
+            s.run("CREATE INDEX element_type IF NOT EXISTS FOR (e:Element) ON (e.type)")
+            s.run("CREATE INDEX element_document IF NOT EXISTS FOR (e:Element) ON (e.document_id)")
+            s.run("CREATE INDEX element_section IF NOT EXISTS FOR (e:Element) ON (e.section)")
 
     def close(self) -> None:
-        """Close the underlying driver and free connection-pool resources."""
         self._driver.close()
 
     def __enter__(self) -> "Neo4jGraphStore":
@@ -65,13 +69,12 @@ class Neo4jGraphStore(IGraphStore):
         self.close()
 
     # ------------------------------------------------------------------
-    # IGraphStore — write operations
+    # Write operations
     # ------------------------------------------------------------------
 
-    def add_element(self, element: AtomicElement) -> None:
-        """Upsert *element* into the graph (MERGE on ``id``)."""
+    def add_element(self, element: AtomicElement, workspace_id: str) -> None:
         query = (
-            "MERGE (e:Element {id: $id}) "
+            "MERGE (e:Element {id: $id, workspace_id: $wid}) "
             "SET e.type = $type, "
             "    e.text = $text, "
             "    e.source = $source, "
@@ -80,92 +83,99 @@ class Neo4jGraphStore(IGraphStore):
             "    e.metadata = $metadata, "
             "    e.section = $section"
         )
-        params = {
-            "id": element.id,
-            "type": element.type.value,
-            "text": element.text,
-            "source": element.source,
-            "document_id": element.document_id,
-            "confidence": element.confidence,
-            "metadata": str(element.metadata),
-            "section": element.metadata.get("section", ""),
-        }
         try:
             with self._driver.session(database=self._db) as s:
-                s.run(query, **params)
+                s.run(query,
+                    id=element.id, wid=workspace_id,
+                    type=element.type.value, text=element.text,
+                    source=element.source, document_id=element.document_id,
+                    confidence=element.confidence,
+                    metadata=str(element.metadata),
+                    section=element.metadata.get("section", ""),
+                )
         except Exception as exc:
-            raise GraphStoreError(
-                f"Failed to add element '{element.id}': {exc}"
-            ) from exc
+            raise GraphStoreError(f"Failed to add element '{element.id}': {exc}") from exc
 
-    def add_relationship(self, rel: Relationship) -> None:
-        """
-        Upsert a typed directed relationship between two existing elements.
-
-        Uses OPTIONAL MATCH so that if either node is missing the query is
-        silently skipped (no error).  Dynamic relationship types require
-        string interpolation — the value is always an enum member so it is
-        safe from injection.
-        """
-        rel_type_str = rel.type.value  # e.g. "COVERS"
+    def add_relationship(self, rel: Relationship, workspace_id: str) -> None:
+        rel_type_str = rel.type.value
         query = (
-            f"MATCH (a:Element {{id: $src}}), (b:Element {{id: $tgt}}) "
+            f"MATCH (a:Element {{id: $src, workspace_id: $wid}}), "
+            f"      (b:Element {{id: $tgt, workspace_id: $wid}}) "
             f"MERGE (a)-[r:{rel_type_str}]->(b) "
             f"SET r.confidence = $conf, r.evidence = $ev"
         )
-        params = {
-            "src": rel.source_id,
-            "tgt": rel.target_id,
-            "conf": rel.confidence,
-            "ev": rel.evidence,
-        }
         try:
             with self._driver.session(database=self._db) as s:
-                s.run(query, **params)
+                s.run(query, src=rel.source_id, tgt=rel.target_id,
+                      wid=workspace_id, conf=rel.confidence, ev=rel.evidence)
         except Exception as exc:
             raise GraphStoreError(
                 f"Failed to add relationship {rel.source_id!r} -[{rel_type_str}]-> "
                 f"{rel.target_id!r}: {exc}"
             ) from exc
 
-    # ------------------------------------------------------------------
-    # IGraphStore — read operations
-    # ------------------------------------------------------------------
-
-    def get_element(self, element_id: str) -> Optional[AtomicElement]:
-        """Return the element with *element_id*, or ``None`` if not found."""
+    def clear_workspace(self, workspace_id: str) -> None:
+        """Delete all elements (and their relationships) belonging to workspace_id."""
         try:
             with self._driver.session(database=self._db) as s:
-                result = s.run(
-                    "MATCH (e:Element {id: $id}) RETURN e", id=element_id
+                s.run("MATCH (e:Element {workspace_id: $wid}) DETACH DELETE e", wid=workspace_id)
+        except Exception as exc:
+            raise GraphStoreError(f"Failed to clear workspace '{workspace_id}': {exc}") from exc
+
+    def clear_document(self, document_id: str, workspace_id: str) -> None:
+        """Remove all elements belonging to document_id within workspace_id."""
+        try:
+            with self._driver.session(database=self._db) as s:
+                s.run(
+                    "MATCH (e:Element {document_id: $did, workspace_id: $wid}) DETACH DELETE e",
+                    did=document_id, wid=workspace_id,
                 )
-                record = result.single()
-                if record is None:
-                    return None
-                return self._node_to_element(record["e"])
         except Exception as exc:
             raise GraphStoreError(
-                f"Failed to fetch element '{element_id}': {exc}"
+                f"Failed to clear document '{document_id}' in workspace '{workspace_id}': {exc}"
             ) from exc
 
-    def get_all_elements(self) -> list[AtomicElement]:
-        """Return every non-Document element currently in the store."""
+    def clear(self) -> None:
+        """Delete ALL nodes across ALL workspaces — admin use only."""
+        try:
+            with self._driver.session(database=self._db) as s:
+                s.run("MATCH (n) DETACH DELETE n")
+        except Exception as exc:
+            raise GraphStoreError(f"Failed to clear graph: {exc}") from exc
+
+    # ------------------------------------------------------------------
+    # Read operations
+    # ------------------------------------------------------------------
+
+    def get_element(self, element_id: str, workspace_id: str) -> Optional[AtomicElement]:
         try:
             with self._driver.session(database=self._db) as s:
                 result = s.run(
-                    "MATCH (e:Element) WHERE e.type <> 'Document' RETURN e"
+                    "MATCH (e:Element {id: $id, workspace_id: $wid}) RETURN e",
+                    id=element_id, wid=workspace_id,
+                )
+                record = result.single()
+                return self._node_to_element(record["e"]) if record else None
+        except Exception as exc:
+            raise GraphStoreError(f"Failed to fetch element '{element_id}': {exc}") from exc
+
+    def get_all_elements(self, workspace_id: str) -> list[AtomicElement]:
+        try:
+            with self._driver.session(database=self._db) as s:
+                result = s.run(
+                    "MATCH (e:Element {workspace_id: $wid}) WHERE e.type <> 'Document' RETURN e",
+                    wid=workspace_id,
                 )
                 return [self._node_to_element(r["e"]) for r in result]
         except Exception as exc:
             raise GraphStoreError(f"Failed to fetch all elements: {exc}") from exc
 
-    def get_elements_by_type(self, element_type: ElementType) -> list[AtomicElement]:
-        """Return all elements whose ``type`` matches *element_type*."""
+    def get_elements_by_type(self, element_type: ElementType, workspace_id: str) -> list[AtomicElement]:
         try:
             with self._driver.session(database=self._db) as s:
                 result = s.run(
-                    "MATCH (e:Element {type: $type}) RETURN e",
-                    type=element_type.value,
+                    "MATCH (e:Element {type: $type, workspace_id: $wid}) RETURN e",
+                    type=element_type.value, wid=workspace_id,
                 )
                 return [self._node_to_element(r["e"]) for r in result]
         except Exception as exc:
@@ -173,41 +183,31 @@ class Neo4jGraphStore(IGraphStore):
                 f"Failed to fetch elements of type '{element_type.value}': {exc}"
             ) from exc
 
-    def get_relationships(self, element_id: str) -> list[Relationship]:
-        """
-        Return all relationships where *element_id* is source **or** target.
-
-        Runs two directional queries and deduplicates by (src, rel_type, tgt).
-        """
+    def get_relationships(self, element_id: str, workspace_id: str) -> list[Relationship]:
         try:
             seen: set[tuple[str, str, str]] = set()
             rels: list[Relationship] = []
-
             with self._driver.session(database=self._db) as s:
-                # Outgoing
                 for r in s.run(
-                    "MATCH (a:Element {id: $id})-[r]->(b:Element) "
+                    "MATCH (a:Element {id: $id, workspace_id: $wid})-[r]->(b:Element) "
                     "RETURN a.id AS src, type(r) AS rtype, b.id AS tgt, "
                     "       r.confidence AS conf, r.evidence AS ev",
-                    id=element_id,
+                    id=element_id, wid=workspace_id,
                 ):
                     key = (r["src"], r["rtype"], r["tgt"])
                     if key not in seen:
                         seen.add(key)
                         rels.append(self._record_to_relationship(r))
-
-                # Incoming
                 for r in s.run(
-                    "MATCH (a:Element)-[r]->(b:Element {id: $id}) "
+                    "MATCH (a:Element)-[r]->(b:Element {id: $id, workspace_id: $wid}) "
                     "RETURN a.id AS src, type(r) AS rtype, b.id AS tgt, "
                     "       r.confidence AS conf, r.evidence AS ev",
-                    id=element_id,
+                    id=element_id, wid=workspace_id,
                 ):
                     key = (r["src"], r["rtype"], r["tgt"])
                     if key not in seen:
                         seen.add(key)
                         rels.append(self._record_to_relationship(r))
-
             return rels
         except Exception as exc:
             raise GraphStoreError(
@@ -215,149 +215,113 @@ class Neo4jGraphStore(IGraphStore):
             ) from exc
 
     def get_incoming_relationships(
-        self,
-        element_id: str,
+        self, element_id: str, workspace_id: str,
         rel_type: Optional[RelationshipType] = None,
     ) -> list[Relationship]:
-        """Return relationships where *element_id* is the **target**."""
         try:
             if rel_type is not None:
                 query = (
-                    f"MATCH (a:Element)-[r:{rel_type.value}]->(b:Element {{id: $id}}) "
+                    f"MATCH (a:Element)-[r:{rel_type.value}]->"
+                    f"(b:Element {{id: $id, workspace_id: $wid}}) "
                     f"RETURN a.id AS src, type(r) AS rtype, b.id AS tgt, "
                     f"       r.confidence AS conf, r.evidence AS ev"
                 )
             else:
                 query = (
-                    "MATCH (a:Element)-[r]->(b:Element {id: $id}) "
+                    "MATCH (a:Element)-[r]->(b:Element {id: $id, workspace_id: $wid}) "
                     "RETURN a.id AS src, type(r) AS rtype, b.id AS tgt, "
                     "       r.confidence AS conf, r.evidence AS ev"
                 )
             with self._driver.session(database=self._db) as s:
-                result = s.run(query, id=element_id)
-                return [self._record_to_relationship(r) for r in result]
+                return [self._record_to_relationship(r)
+                        for r in s.run(query, id=element_id, wid=workspace_id)]
         except Exception as exc:
             raise GraphStoreError(
                 f"Failed to fetch incoming relationships for '{element_id}': {exc}"
             ) from exc
 
     def get_outgoing_relationships(
-        self,
-        element_id: str,
+        self, element_id: str, workspace_id: str,
         rel_type: Optional[RelationshipType] = None,
     ) -> list[Relationship]:
-        """Return relationships where *element_id* is the **source**."""
         try:
             if rel_type is not None:
                 query = (
-                    f"MATCH (a:Element {{id: $id}})-[r:{rel_type.value}]->(b:Element) "
+                    f"MATCH (a:Element {{id: $id, workspace_id: $wid}})-[r:{rel_type.value}]->(b:Element) "
                     f"RETURN a.id AS src, type(r) AS rtype, b.id AS tgt, "
                     f"       r.confidence AS conf, r.evidence AS ev"
                 )
             else:
                 query = (
-                    "MATCH (a:Element {id: $id})-[r]->(b:Element) "
+                    "MATCH (a:Element {id: $id, workspace_id: $wid})-[r]->(b:Element) "
                     "RETURN a.id AS src, type(r) AS rtype, b.id AS tgt, "
                     "       r.confidence AS conf, r.evidence AS ev"
                 )
             with self._driver.session(database=self._db) as s:
-                result = s.run(query, id=element_id)
-                return [self._record_to_relationship(r) for r in result]
+                return [self._record_to_relationship(r)
+                        for r in s.run(query, id=element_id, wid=workspace_id)]
         except Exception as exc:
             raise GraphStoreError(
                 f"Failed to fetch outgoing relationships for '{element_id}': {exc}"
             ) from exc
 
-    def get_type_counts(self) -> dict[str, int]:
-        """Return {type_value: count} for all Element nodes — useful for diagnostics."""
+    def get_type_counts(self, workspace_id: str) -> dict[str, int]:
         try:
             with self._driver.session(database=self._db) as s:
                 result = s.run(
-                    "MATCH (e:Element) RETURN e.type AS t, count(e) AS cnt"
+                    "MATCH (e:Element {workspace_id: $wid}) RETURN e.type AS t, count(e) AS cnt",
+                    wid=workspace_id,
                 )
                 return {r["t"]: r["cnt"] for r in result}
         except Exception:
             return {}
 
-    def get_document_hashes(self) -> dict[str, str]:
-        """Return {doc_id: file_hash} for all Document nodes that have a stored hash."""
+    def get_document_hashes(self, workspace_id: str) -> dict[str, str]:
         try:
             with self._driver.session(database=self._db) as s:
                 result = s.run(
-                    "MATCH (e:Element {type: 'Document'}) "
+                    "MATCH (e:Element {type: 'Document', workspace_id: $wid}) "
                     "WHERE e.doc_hash IS NOT NULL AND e.doc_hash <> '' "
-                    "RETURN e.id AS doc_id, e.doc_hash AS doc_hash"
+                    "RETURN e.id AS doc_id, e.doc_hash AS doc_hash",
+                    wid=workspace_id,
                 )
                 return {r["doc_id"]: r["doc_hash"] for r in result}
         except Exception as exc:
             raise GraphStoreError(f"Failed to fetch document hashes: {exc}") from exc
 
-    def clear(self) -> None:
-        """Delete every node and relationship in the configured database."""
-        try:
-            with self._driver.session(database=self._db) as s:
-                s.run("MATCH (n) DETACH DELETE n")
-        except Exception as exc:
-            raise GraphStoreError(f"Failed to clear graph: {exc}") from exc
-
-    def clear_document(self, document_id: str) -> None:
-        """Remove all elements (and their relationships) belonging to *document_id*.
-
-        Used for incremental re-ingestion: wipes only the document being
-        replaced so other documents in the graph are preserved.
-        """
-        try:
-            with self._driver.session(database=self._db) as s:
-                s.run(
-                    "MATCH (e:Element {document_id: $did}) DETACH DELETE e",
-                    did=document_id,
-                )
-        except Exception as exc:
-            raise GraphStoreError(
-                f"Failed to clear document '{document_id}': {exc}"
-            ) from exc
-
-    def get_graph_for_visualization(self) -> dict:
-        """
-        Return a ``{"nodes": [...], "edges": [...]}`` dict suitable for
-        rendering with pyvis or any JavaScript graph library.
-        """
+    def get_graph_for_visualization(self, workspace_id: str) -> dict:
         nodes_query = (
-            "MATCH (e:Element) "
+            "MATCH (e:Element {workspace_id: $wid}) "
             "RETURN e.id AS id, e.type AS type, e.text AS text, "
             "       e.source AS source, e.document_id AS doc_id"
         )
         edges_query = (
-            "MATCH (a:Element)-[r]->(b:Element) "
+            "MATCH (a:Element {workspace_id: $wid})-[r]->(b:Element {workspace_id: $wid}) "
             "RETURN a.id AS src, type(r) AS rtype, b.id AS tgt, "
             "       r.confidence AS conf, coalesce(r.evidence, '') AS ev"
         )
         try:
             with self._driver.session(database=self._db) as s:
-                nodes = [dict(r) for r in s.run(nodes_query)]
-                edges = [dict(r) for r in s.run(edges_query)]
+                nodes = [dict(r) for r in s.run(nodes_query, wid=workspace_id)]
+                edges = [dict(r) for r in s.run(edges_query, wid=workspace_id)]
             return {"nodes": nodes, "edges": edges}
         except Exception as exc:
-            raise GraphStoreError(
-                f"Failed to fetch graph for visualization: {exc}"
-            ) from exc
+            raise GraphStoreError(f"Failed to fetch graph for visualization: {exc}") from exc
 
-    # ------------------------------------------------------------------
-    # Properties
-    # ------------------------------------------------------------------
-
-    @property
-    def node_count(self) -> int:
-        """Total number of Element nodes currently in the store."""
+    def node_count(self, workspace_id: str) -> int:
         with self._driver.session(database=self._db) as s:
-            result = s.run("MATCH (e:Element) RETURN count(e) AS cnt")
+            result = s.run(
+                "MATCH (e:Element {workspace_id: $wid}) RETURN count(e) AS cnt",
+                wid=workspace_id,
+            )
             return result.single()["cnt"]
 
-    @property
-    def edge_count(self) -> int:
-        """Total number of directed relationships currently in the store."""
+    def edge_count(self, workspace_id: str) -> int:
         with self._driver.session(database=self._db) as s:
-            result = s.run("MATCH ()-[r]->() RETURN count(r) AS cnt")
+            result = s.run(
+                "MATCH (a:Element {workspace_id: $wid})-[r]->(b:Element) RETURN count(r) AS cnt",
+                wid=workspace_id,
+            )
             return result.single()["cnt"]
 
     # ------------------------------------------------------------------
@@ -365,22 +329,13 @@ class Neo4jGraphStore(IGraphStore):
     # ------------------------------------------------------------------
 
     def _node_to_element(self, node: object) -> AtomicElement:
-        """
-        Map a neo4j :class:`~neo4j.graph.Node` to an :class:`AtomicElement`.
-
-        Unknown ``type`` values fall back to ``ElementType.REQUIREMENT`` so
-        that "Document" pseudo-nodes (written directly by :class:`GraphBuilder`)
-        are still parseable without crashing.
-        """
         props = dict(node)  # type: ignore[call-overload]
         raw_type = props.get("type", "")
         try:
             elem_type = ElementType(raw_type)
         except ValueError:
-            # "Document" and any other ad-hoc label not in ElementType
             elem_type = ElementType.REQUIREMENT
 
-        # metadata is stored as a string representation; parse safely
         raw_meta = props.get("metadata", "{}")
         try:
             import ast
@@ -388,8 +343,6 @@ class Neo4jGraphStore(IGraphStore):
         except Exception:
             metadata = {}
 
-        # Populate section/page_number from dedicated indexed node properties
-        # (these override anything that may have been serialised in the metadata string)
         if props.get("section"):
             metadata["section"] = props["section"]
         if props.get("page_number") is not None:
@@ -407,14 +360,11 @@ class Neo4jGraphStore(IGraphStore):
 
     @staticmethod
     def _record_to_relationship(record: object) -> Relationship:
-        """Map a query result record to a :class:`Relationship`."""
         r = dict(record)  # type: ignore[call-overload]
-        raw_type = r.get("rtype", "")
         try:
-            rel_type = RelationshipType(raw_type)
+            rel_type = RelationshipType(r.get("rtype", ""))
         except ValueError:
             rel_type = RelationshipType.CONTAINS
-
         return Relationship(
             source_id=r["src"],
             target_id=r["tgt"],

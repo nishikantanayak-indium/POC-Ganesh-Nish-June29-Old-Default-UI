@@ -149,9 +149,9 @@ function SourcesSection({ evidence }: { evidence: EvidenceItem[] }) {
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
-interface Props { disabled?: boolean }
+interface Props { workspaceId: string; disabled?: boolean }
 
-export default function ChatWindow({ disabled }: Props) {
+export default function ChatWindow({ workspaceId, disabled }: Props) {
   const [open, setOpen]       = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput]     = useState('')
@@ -181,7 +181,7 @@ export default function ChatWindow({ disabled }: Props) {
     setLoading(true)
 
     try {
-      const result = await askQuestion(question)
+      const result = await askQuestion(workspaceId, question)
       setMessages(prev => [...prev, {
         id: `a-${Date.now()}`,
         role: 'assistant',

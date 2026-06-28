@@ -8,6 +8,7 @@ import { streamPipeline } from '../api/client'
 import type { PipelineStep, SSEEvent } from '../types'
 
 interface Props {
+  workspaceId: string
   steps: PipelineStep[]
   pipelineRunning: boolean
   onPipelineStart: () => void
@@ -17,7 +18,7 @@ interface Props {
 }
 
 export default function UploadZone({
-  steps, pipelineRunning, onPipelineStart, onSSEEvent, hasData, onLoadExisting
+  workspaceId, steps, pipelineRunning, onPipelineStart, onSSEEvent, hasData, onLoadExisting
 }: Props) {
   const [files, setFiles] = useState<File[]>([])
   const [dragging, setDragging] = useState(false)
@@ -49,10 +50,11 @@ export default function UploadZone({
     setError(null)
     onPipelineStart()
     cleanupRef.current = streamPipeline(
+      workspaceId,
       files,
-      (evt) => onSSEEvent(evt as SSEEvent),
+      (evt: unknown) => onSSEEvent(evt as SSEEvent),
       () => { cleanupRef.current = null },
-      (err) => { setError(err); cleanupRef.current = null },
+      (err: string) => { setError(err); cleanupRef.current = null },
     )
   }
 

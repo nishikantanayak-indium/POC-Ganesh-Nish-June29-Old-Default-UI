@@ -1,3 +1,11 @@
+export interface Workspace {
+  id: string
+  name: string
+  description: string
+  created_at: string
+  updated_at: string
+}
+
 export type ElementType = 'Requirement' | 'Clause' | 'Risk' | 'Mitigation' | 'LD' | 'Document'
 export type RelationshipType = 'COVERS' | 'PARTIALLY_COVERS' | 'INTRODUCES_RISK' | 'MITIGATED_BY' | 'LINKED_TO_LD' | 'CONTRADICTS' | 'CONTAINS'
 export type CoverageStatus = 'Covered' | 'Partially Covered' | 'Not Covered'

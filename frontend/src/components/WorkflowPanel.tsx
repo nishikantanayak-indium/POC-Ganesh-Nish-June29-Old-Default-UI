@@ -283,6 +283,7 @@ function JobCard({ job }: { job: PipelineJob }) {
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 export interface WorkflowPanelProps {
+  workspaceId: string
   onSSEEvent: (evt: SSEEvent) => void
   hasData: boolean
   onLoadExisting: () => void
@@ -292,7 +293,7 @@ export interface WorkflowPanelProps {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function WorkflowPanel({
-  onSSEEvent, hasData, onLoadExisting, onToast,
+  workspaceId, onSSEEvent, hasData, onLoadExisting, onToast,
 }: WorkflowPanelProps) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [dragging, setDragging]         = useState(false)
@@ -348,6 +349,7 @@ export default function WorkflowPanel({
     const patch = (fn: (j: PipelineJob) => PipelineJob) => patchJob(jobId, fn)
 
     streamPipeline(
+      workspaceId,
       filesToProcess,
 
       // ── SSE event ─────────────────────────────────────────────────

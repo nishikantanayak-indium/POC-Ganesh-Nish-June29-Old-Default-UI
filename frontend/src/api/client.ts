@@ -1,49 +1,95 @@
-import type { AppStatus, CoverageResult, GraphData, TraceabilityChain, GraphNode, EvidenceItem } from '../types'
+import type {
+  AppStatus, CoverageResult, GraphData, TraceabilityChain,
+  GraphNode, EvidenceItem, Workspace,
+} from '../types'
 
 const BASE = ''  // vite proxy forwards /api → localhost:8000
 
-export async function fetchStatus(): Promise<AppStatus> {
-  const r = await fetch(`${BASE}/api/status`)
+// ── Workspace API ─────────────────────────────────────────────────────────────
+
+export async function fetchWorkspaces(): Promise<Workspace[]> {
+  const r = await fetch(`${BASE}/api/workspaces`)
+  if (!r.ok) throw new Error(await r.text())
+  const data = await r.json()
+  return data.workspaces
+}
+
+export async function createWorkspace(name: string, description = ''): Promise<Workspace> {
+  const r = await fetch(`${BASE}/api/workspaces`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, description }),
+  })
   if (!r.ok) throw new Error(await r.text())
   return r.json()
 }
 
-export async function fetchGraphData(showContains = false): Promise<GraphData> {
-  const r = await fetch(`${BASE}/api/graph/data?show_contains=${showContains}`)
-  if (!r.ok) throw new Error(await r.text())
-  const raw = await r.json()
-  // Backend returns {nodes: [...], edges: [...]} but edges use src/tgt keys
-  return raw
-}
-
-export async function fetchSubgraph(nodeId: string): Promise<GraphData> {
-  const r = await fetch(`${BASE}/api/graph/subgraph/${encodeURIComponent(nodeId)}`)
+export async function updateWorkspace(
+  id: string, name: string, description: string,
+): Promise<Workspace> {
+  const r = await fetch(`${BASE}/api/workspaces/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, description }),
+  })
   if (!r.ok) throw new Error(await r.text())
   return r.json()
 }
 
-export async function fetchElements(): Promise<GraphNode[]> {
-  const r = await fetch(`${BASE}/api/elements`)
+export async function deleteWorkspace(id: string): Promise<void> {
+  const r = await fetch(`${BASE}/api/workspaces/${id}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error(await r.text())
+}
+
+// ── Workspace-scoped endpoints ────────────────────────────────────────────────
+
+function ws(workspaceId: string) {
+  return `${BASE}/api/workspaces/${workspaceId}`
+}
+
+export async function fetchStatus(workspaceId: string): Promise<AppStatus> {
+  const r = await fetch(`${ws(workspaceId)}/status`)
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function fetchGraphData(workspaceId: string, showContains = false): Promise<GraphData> {
+  const r = await fetch(`${ws(workspaceId)}/graph/data?show_contains=${showContains}`)
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function fetchSubgraph(workspaceId: string, nodeId: string): Promise<GraphData> {
+  const r = await fetch(`${ws(workspaceId)}/graph/subgraph/${encodeURIComponent(nodeId)}`)
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function fetchElements(workspaceId: string): Promise<GraphNode[]> {
+  const r = await fetch(`${ws(workspaceId)}/elements`)
   if (!r.ok) throw new Error(await r.text())
   const data = await r.json()
   return data.elements
 }
 
-export async function fetchCoverage(): Promise<CoverageResult[]> {
-  const r = await fetch(`${BASE}/api/traceability/coverage`)
+export async function fetchCoverage(workspaceId: string): Promise<CoverageResult[]> {
+  const r = await fetch(`${ws(workspaceId)}/traceability/coverage`)
   if (!r.ok) throw new Error(await r.text())
   const data = await r.json()
   return data.results
 }
 
-export async function fetchChain(reqId: string): Promise<TraceabilityChain> {
-  const r = await fetch(`${BASE}/api/traceability/chain/${encodeURIComponent(reqId)}`)
+export async function fetchChain(workspaceId: string, reqId: string): Promise<TraceabilityChain> {
+  const r = await fetch(`${ws(workspaceId)}/traceability/chain/${encodeURIComponent(reqId)}`)
   if (!r.ok) throw new Error(await r.text())
   return r.json()
 }
 
-export async function askQuestion(question: string): Promise<{ answer: string; evidence: EvidenceItem[]; query_type: string }> {
-  const r = await fetch(`${BASE}/api/chat/ask`, {
+export async function askQuestion(
+  workspaceId: string,
+  question: string,
+): Promise<{ answer: string; evidence: EvidenceItem[]; query_type: string }> {
+  const r = await fetch(`${ws(workspaceId)}/chat/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ question }),
@@ -52,15 +98,13 @@ export async function askQuestion(question: string): Promise<{ answer: string; e
   return r.json()
 }
 
-export async function resetGraph(): Promise<void> {
-  const r = await fetch(`${BASE}/api/reset`, { method: 'POST' })
+export async function resetGraph(workspaceId: string): Promise<void> {
+  const r = await fetch(`${ws(workspaceId)}/reset`, { method: 'POST' })
   if (!r.ok) throw new Error(await r.text())
 }
 
-/**
- * Stream SSE pipeline events. Returns a cleanup function.
- */
 export function streamPipeline(
+  workspaceId: string,
   files: File[],
   onEvent: (event: unknown) => void,
   onDone: () => void,
@@ -72,15 +116,13 @@ export function streamPipeline(
 
   ;(async () => {
     try {
-      const response = await fetch(`${BASE}/api/pipeline/run`, {
+      const response = await fetch(`${ws(workspaceId)}/pipeline/run`, {
         method: 'POST',
         body: formData,
         signal: controller.signal,
       })
-      if (!response.ok) {
-        onError(await response.text())
-        return
-      }
+      if (!response.ok) { onError(await response.text()); return }
+
       const reader = response.body!.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
@@ -92,18 +134,13 @@ export function streamPipeline(
         buffer = lines.pop() ?? ''
         for (const line of lines) {
           if (line.startsWith('data: ')) {
-            try {
-              const parsed = JSON.parse(line.slice(6))
-              onEvent(parsed)
-            } catch { /* malformed line */ }
+            try { onEvent(JSON.parse(line.slice(6))) } catch { /* malformed */ }
           }
         }
       }
       onDone()
     } catch (err: unknown) {
-      if (err instanceof Error && err.name !== 'AbortError') {
-        onError(err.message)
-      }
+      if (err instanceof Error && err.name !== 'AbortError') onError(err.message)
     }
   })()
 
