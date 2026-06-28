@@ -48,7 +48,7 @@ function ElementCard({ elem }: { elem: ChainElement }) {
         >
           {elem.type}
         </span>
-        <span className="font-mono text-[11px] text-white font-semibold">{elem.id}</span>
+        <span className="font-mono text-[11px] text-foreground font-semibold">{elem.id}</span>
 
         <span className="ml-auto flex items-center gap-1.5">
           {/* Relationship badge */}
@@ -192,7 +192,7 @@ export default function TraceabilityView({ workspaceId, coverage }: { workspaceI
           </div>
           <div className="flex items-center justify-between text-xs mb-1">
             <span className="text-muted">Coverage score</span>
-            <span className="font-mono text-white font-semibold">{score.toFixed(0)}%</span>
+            <span className="font-mono text-foreground font-semibold">{score.toFixed(0)}%</span>
           </div>
           <div className="h-1.5 bg-card rounded-full overflow-hidden">
             <div className="h-full bg-success rounded-full transition-all" style={{ width: `${score}%` }} />
@@ -216,7 +216,7 @@ export default function TraceabilityView({ workspaceId, coverage }: { workspaceI
                 <span style={{ color: cfg.color }} className="shrink-0 mt-0.5">{cfg.icon}</span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-xs text-white font-semibold">{r.requirement_id}</span>
+                    <span className="font-mono text-xs text-foreground font-semibold">{r.requirement_id}</span>
                     <span className="shrink-0">
                       <ChevronRight size={12} className={clsx('text-muted transition-transform', isSelected && 'rotate-90')} />
                     </span>
@@ -255,7 +255,7 @@ export default function TraceabilityView({ workspaceId, coverage }: { workspaceI
           <>
             {/* Header bar */}
             <div className="shrink-0 px-4 py-3 border-b border-border bg-surface flex items-center gap-3 flex-wrap">
-              <span className="font-mono text-sm font-bold text-white">{chain.requirement.id}</span>
+              <span className="font-mono text-sm font-bold text-foreground">{chain.requirement.id}</span>
               <span className="text-xs text-slate-400 truncate max-w-xs">{chain.requirement.text.slice(0, 80)}{chain.requirement.text.length > 80 ? '…' : ''}</span>
               <span className="ml-auto text-[10px] font-mono text-slate-500 bg-slate-800 border border-slate-700 px-2 py-0.5 rounded">
                 {chain.requirement.source}

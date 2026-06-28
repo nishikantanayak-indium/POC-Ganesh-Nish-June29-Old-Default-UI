@@ -322,7 +322,7 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
 
           <button
             onClick={() => setShowContains(v => !v)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border border-border text-muted hover:text-white transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border border-border text-muted hover:text-foreground transition-colors"
           >
             {showContains ? <Eye size={12} /> : <EyeOff size={12} />}
             CONTAINS
@@ -334,12 +334,12 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
               onChange={e => setSubgraphId(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleExploreSubgraph()}
               placeholder="node id…"
-              className="w-28 px-2.5 py-1.5 rounded-lg text-xs bg-card border border-border text-white placeholder-muted outline-none focus:border-primary font-mono"
+              className="w-28 px-2.5 py-1.5 rounded-lg text-xs bg-card border border-border text-foreground placeholder-muted outline-none focus:border-primary font-mono"
             />
             <button
               onClick={handleExploreSubgraph}
               disabled={subgraphLoading}
-              className="px-2.5 py-1.5 rounded-lg text-xs bg-card border border-border text-muted hover:text-white transition-colors flex items-center gap-1"
+              className="px-2.5 py-1.5 rounded-lg text-xs bg-card border border-border text-muted hover:text-foreground transition-colors flex items-center gap-1"
             >
               <Search size={11} />
               Explore
@@ -349,14 +349,14 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
           {viewMode === 'sub' && (
             <button
               onClick={() => { setViewMode('full'); loadGraph() }}
-              className="px-2.5 py-1.5 rounded-lg text-xs bg-card border border-border text-muted hover:text-white transition-colors"
+              className="px-2.5 py-1.5 rounded-lg text-xs bg-card border border-border text-muted hover:text-foreground transition-colors"
             >
               ← Full
             </button>
           )}
 
           <button onClick={loadGraph} title="Re-layout"
-            className="p-1.5 rounded-lg border border-border text-muted hover:text-white transition-colors">
+            className="p-1.5 rounded-lg border border-border text-muted hover:text-foreground transition-colors">
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
@@ -432,12 +432,12 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
                   className="text-xs font-mono font-bold uppercase tracking-widest">
                   {selectedNode.type as string}
                 </span>
-                <p className="text-white font-semibold font-mono text-sm mt-0.5">
+                <p className="text-foreground font-semibold font-mono text-sm mt-0.5">
                   {selectedNode.id as string}
                 </p>
               </div>
               <button onClick={() => setSelectedNode(null)}
-                className="text-muted hover:text-white text-xl leading-none transition-colors">
+                className="text-muted hover:text-foreground text-xl leading-none transition-colors">
                 ×
               </button>
             </div>

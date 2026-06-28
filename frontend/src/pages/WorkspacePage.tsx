@@ -4,6 +4,8 @@ import { Network, Upload, GitBranch, Zap, Trash2, ArrowLeft } from 'lucide-react
 import { motion } from 'framer-motion'
 import clsx from 'clsx'
 
+import GraphRAGLogo from '../components/GraphRAGLogo'
+import ThemeToggle from '../components/ThemeToggle'
 import WorkflowPanel from '../components/WorkflowPanel'
 import KnowledgeGraph from '../components/KnowledgeGraph'
 import ElementsTable from '../components/ElementsTable'
@@ -131,7 +133,7 @@ export default function WorkspacePage() {
         <div className="flex items-center gap-4">
           <button
             onClick={() => navigate('/workspaces')}
-            className="flex items-center gap-1.5 text-muted hover:text-white transition-colors text-xs font-medium"
+            className="flex items-center gap-1.5 text-muted hover:text-foreground transition-colors text-xs font-medium"
           >
             <ArrowLeft size={13} />
             Workspaces
@@ -139,9 +141,9 @@ export default function WorkspacePage() {
           <div className="w-px h-4 bg-border" />
           <div className="flex items-center gap-2.5">
             <div className="w-6 h-6 rounded-lg bg-primary flex items-center justify-center">
-              <Network size={12} className="text-white" />
+              <GraphRAGLogo size={14} className="text-foreground" />
             </div>
-            <span className="font-semibold text-white text-sm tracking-tight">GraphRAG</span>
+            <span className="font-semibold text-foreground text-sm tracking-tight">GraphRAG</span>
           </div>
         </div>
 
@@ -152,6 +154,7 @@ export default function WorkspacePage() {
               Loading…
             </span>
           )}
+          <ThemeToggle />
           {status && (
             <div className="flex items-center gap-3">
               <Stat label="Nodes" value={status.nodes} />
@@ -165,7 +168,7 @@ export default function WorkspacePage() {
                 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
                 resetConfirm
                   ? 'bg-danger/20 text-danger border border-danger/40'
-                  : 'bg-card text-muted hover:text-white border border-border',
+                  : 'bg-card text-muted hover:text-foreground border border-border',
               )}
             >
               <Trash2 size={12} />
@@ -175,7 +178,7 @@ export default function WorkspacePage() {
           {resetConfirm && (
             <button
               onClick={() => setResetConfirm(false)}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-card text-muted border border-border hover:text-white"
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-card text-muted border border-border hover:text-foreground"
             >
               Cancel
             </button>
@@ -192,13 +195,13 @@ export default function WorkspacePage() {
               key={t.id}
               onClick={() => !disabled && handleTabChange(t.id)}
               disabled={disabled}
+              style={{
+                borderBottomColor: t.id === tab ? 'var(--primary)' : 'transparent',
+                color: t.id === tab ? 'var(--foreground)' : disabled ? 'var(--border)' : 'var(--muted)',
+              }}
               className={clsx(
                 'flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-all border-b-2 -mb-px',
-                t.id === tab
-                  ? 'text-white border-primary bg-bg'
-                  : disabled
-                  ? 'text-border border-transparent cursor-not-allowed'
-                  : 'text-muted border-transparent hover:text-white hover:border-border',
+                disabled ? 'cursor-not-allowed' : 'hover:brightness-125',
               )}
             >
               {t.icon}
@@ -265,7 +268,7 @@ export default function WorkspacePage() {
 function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div className="text-center">
-      <div className="text-white font-mono text-sm font-semibold">{value.toLocaleString()}</div>
+      <div className="text-foreground font-mono text-sm font-semibold">{value.toLocaleString()}</div>
       <div className="text-muted text-xs">{label}</div>
     </div>
   )

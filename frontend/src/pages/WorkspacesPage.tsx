@@ -5,6 +5,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import clsx from 'clsx'
 import { fetchWorkspaces, createWorkspace, deleteWorkspace } from '../api/client'
 import type { Workspace } from '../types'
+import GraphRAGLogo from '../components/GraphRAGLogo'
+import ThemeToggle from '../components/ThemeToggle'
 
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime()
@@ -48,8 +50,8 @@ function CreateModal({ onClose, onCreate }: {
         className="bg-surface border border-border rounded-2xl w-full max-w-md shadow-2xl"
       >
         <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border">
-          <h2 className="text-base font-semibold text-white">New Analysis Workspace</h2>
-          <button onClick={onClose} className="text-muted hover:text-white transition-colors p-1 rounded-lg hover:bg-card">
+          <h2 className="text-base font-semibold text-foreground">New Analysis Workspace</h2>
+          <button onClick={onClose} className="text-muted hover:text-foreground transition-colors p-1 rounded-lg hover:bg-card">
             <X size={16} />
           </button>
         </div>
@@ -61,7 +63,7 @@ function CreateModal({ onClose, onCreate }: {
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="e.g. RFP Analysis Q3 2024"
-              className="w-full bg-card border border-border rounded-xl px-4 py-2.5 text-sm text-white placeholder-muted/50 focus:outline-none focus:border-primary transition-colors"
+              className="w-full bg-card border border-border rounded-xl px-4 py-2.5 text-sm text-foreground placeholder-muted/50 focus:outline-none focus:border-primary transition-colors"
             />
           </div>
           <div>
@@ -71,7 +73,7 @@ function CreateModal({ onClose, onCreate }: {
               onChange={e => setDesc(e.target.value)}
               placeholder="Optional — describe the scope or purpose"
               rows={3}
-              className="w-full bg-card border border-border rounded-xl px-4 py-2.5 text-sm text-white placeholder-muted/50 focus:outline-none focus:border-primary transition-colors resize-none"
+              className="w-full bg-card border border-border rounded-xl px-4 py-2.5 text-sm text-foreground placeholder-muted/50 focus:outline-none focus:border-primary transition-colors resize-none"
             />
           </div>
           {error && <p className="text-xs text-danger">{error}</p>}
@@ -79,7 +81,7 @@ function CreateModal({ onClose, onCreate }: {
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2.5 rounded-xl text-sm font-medium text-muted border border-border hover:text-white transition-colors"
+              className="flex-1 py-2.5 rounded-xl text-sm font-medium text-muted border border-border hover:text-foreground transition-colors"
             >
               Cancel
             </button>
@@ -132,7 +134,7 @@ function WorkspaceCard({ workspace, onOpen, onDelete }: {
               </button>
               <button
                 onClick={() => setConfirmDelete(false)}
-                className="px-2.5 py-1 rounded-lg text-xs font-medium text-muted border border-border hover:text-white transition-colors"
+                className="px-2.5 py-1 rounded-lg text-xs font-medium text-muted border border-border hover:text-foreground transition-colors"
               >
                 Cancel
               </button>
@@ -148,7 +150,7 @@ function WorkspaceCard({ workspace, onOpen, onDelete }: {
         </div>
       </div>
 
-      <h3 className="font-semibold text-white text-sm mb-1 truncate">{workspace.name}</h3>
+      <h3 className="font-semibold text-foreground text-sm mb-1 truncate">{workspace.name}</h3>
       {workspace.description && (
         <p className="text-xs text-muted line-clamp-2 mb-3">{workspace.description}</p>
       )}
@@ -207,26 +209,29 @@ export default function WorkspacesPage() {
           className="flex items-center gap-3 hover:opacity-80 transition-opacity"
         >
           <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center">
-            <Network size={15} className="text-white" />
+            <GraphRAGLogo size={18} className="text-foreground" />
           </div>
           <div>
-            <span className="font-bold text-white text-base tracking-tight">GraphRAG</span>
+            <span className="font-bold text-foreground text-base tracking-tight">GraphRAG</span>
             <span className="ml-2 text-muted text-xs font-mono">Procurement Intelligence</span>
           </div>
         </button>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary/90 transition-colors shadow-lg shadow-primary/20"
-        >
-          <Plus size={14} />
-          New workspace
-        </button>
+        <div className="flex items-center gap-3">
+          <ThemeToggle />
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary/90 transition-colors shadow-lg shadow-primary/20"
+          >
+            <Plus size={14} />
+            New workspace
+          </button>
+        </div>
       </header>
 
       <main className="max-w-5xl mx-auto px-8 py-10">
         {/* Hero */}
         <div className="mb-8">
-          <h1 className="text-2xl font-bold text-white">Analysis Workspaces</h1>
+          <h1 className="text-2xl font-bold text-foreground">Analysis Workspaces</h1>
           <p className="text-muted text-sm mt-1">
             Each workspace is an isolated procurement analysis — separate graph, vectors, and coverage.
           </p>
@@ -253,7 +258,7 @@ export default function WorkspacesPage() {
             <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-4">
               <FolderOpen size={24} className="text-primary" />
             </div>
-            <h2 className="text-base font-semibold text-white mb-2">No workspaces yet</h2>
+            <h2 className="text-base font-semibold text-foreground mb-2">No workspaces yet</h2>
             <p className="text-sm text-muted mb-6 max-w-xs">
               Create a workspace to start ingesting procurement documents and building knowledge graphs.
             </p>

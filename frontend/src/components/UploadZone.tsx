@@ -72,7 +72,7 @@ export default function UploadZone({
             animate={{ opacity: 1, y: 0 }}
             className="rounded-xl border border-primary/30 bg-primary/10 p-4"
           >
-            <div className="text-sm font-medium text-white mb-1">Graph already populated</div>
+            <div className="text-sm font-medium text-foreground mb-1">Graph already populated</div>
             <div className="text-xs text-muted mb-3">
               Existing data detected in Neo4j. Upload new documents to extend, or view current data.
             </div>
@@ -111,10 +111,10 @@ export default function UploadZone({
             'w-12 h-12 rounded-xl flex items-center justify-center transition-all',
             dragging ? 'bg-primary' : 'bg-card border border-border',
           )}>
-            <Upload size={20} className={dragging ? 'text-white' : 'text-muted'} />
+            <Upload size={20} className={dragging ? 'text-foreground' : 'text-muted'} />
           </div>
           <div>
-            <p className="text-sm font-medium text-white">Drop files here or click to browse</p>
+            <p className="text-sm font-medium text-foreground">Drop files here or click to browse</p>
             <p className="text-xs text-muted mt-1">PDF, DOCX — RFP, Contract, Risk Sheet</p>
           </div>
         </div>
@@ -128,7 +128,7 @@ export default function UploadZone({
             {files.map(f => (
               <div key={f.name} className="flex items-center gap-2 p-2.5 rounded-lg bg-card border border-border">
                 <FileText size={14} className="text-primary shrink-0" />
-                <span className="flex-1 text-sm text-white truncate font-mono text-xs">{f.name}</span>
+                <span className="flex-1 text-sm text-foreground truncate font-mono text-xs">{f.name}</span>
                 <span className="text-xs text-muted shrink-0">{(f.size / 1024).toFixed(0)}KB</span>
                 <button onClick={() => removeFile(f.name)} className="text-border hover:text-danger transition-colors">
                   <X size={12} />

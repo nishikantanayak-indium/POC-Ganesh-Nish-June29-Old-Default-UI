@@ -82,7 +82,7 @@ export default function ElementsTable({ elements }: Props) {
               'px-3 py-1 rounded-full text-xs font-medium transition-all border',
               typeFilter === 'All'
                 ? 'bg-primary/20 text-primary border-primary/40'
-                : 'text-muted border-border hover:text-white',
+                : 'text-muted border-border hover:text-foreground',
             )}
           >
             All ({elements.length})
@@ -95,7 +95,7 @@ export default function ElementsTable({ elements }: Props) {
                 'px-3 py-1 rounded-full text-xs font-medium transition-all border',
                 typeFilter === t
                   ? `${TYPE_COLORS[t]} border-current`
-                  : 'text-muted border-border hover:text-white',
+                  : 'text-muted border-border hover:text-foreground',
               )}
             >
               {t.slice(0, 3)} {typeCounts[t] ? `(${typeCounts[t]})` : ''}
@@ -110,7 +110,7 @@ export default function ElementsTable({ elements }: Props) {
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search elements…"
-            className="bg-transparent text-sm text-white placeholder-muted outline-none w-48"
+            className="bg-transparent text-sm text-foreground placeholder-muted outline-none w-48"
           />
         </div>
 
@@ -138,7 +138,7 @@ export default function ElementsTable({ elements }: Props) {
                   <td className="text-center">
                     {isOpen ? <ChevronDown size={12} className="text-muted mx-auto" /> : <ChevronRight size={12} className="text-muted mx-auto" />}
                   </td>
-                  <td className="font-mono text-xs text-white whitespace-nowrap">{e.id}</td>
+                  <td className="font-mono text-xs text-foreground whitespace-nowrap">{e.id}</td>
                   <td>
                     <span className={clsx('text-xs font-medium px-2 py-0.5 rounded-full border', TYPE_COLORS[e.type])}>
                       {e.type}
@@ -156,7 +156,7 @@ export default function ElementsTable({ elements }: Props) {
                   <tr key={`${e.id}-detail`} className="bg-card">
                     <td />
                     <td colSpan={5} className="py-3 px-4">
-                      <p className="text-sm text-white leading-relaxed mb-2">{e.text}</p>
+                      <p className="text-sm text-foreground leading-relaxed mb-2">{e.text}</p>
                       <div className="flex items-center gap-4 text-xs text-muted">
                         <span className="font-mono">doc: {e.document_id}</span>
                         <span className="font-mono">src: {e.source}</span>
@@ -180,7 +180,7 @@ function SortTh({ col, label, current, dir, onClick }: {
 }) {
   return (
     <th
-      className="cursor-pointer select-none hover:text-white transition-colors whitespace-nowrap"
+      className="cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
       onClick={() => onClick(col as 'id' | 'type' | 'confidence')}
     >
       {label} {current === col ? (dir === 1 ? '↑' : '↓') : ''}

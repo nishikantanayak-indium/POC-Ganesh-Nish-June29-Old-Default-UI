@@ -223,7 +223,7 @@ export default function ChatWindow({ workspaceId, disabled }: Props) {
             <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card shrink-0">
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
-                <span className="text-sm font-semibold text-white">Graph Q&A</span>
+                <span className="text-sm font-semibold text-foreground">Graph Q&A</span>
                 {aiMsgCount > 0 && (
                   <span className="text-xs text-muted font-mono">· {aiMsgCount} answer{aiMsgCount !== 1 ? 's' : ''}</span>
                 )}
@@ -231,11 +231,11 @@ export default function ChatWindow({ workspaceId, disabled }: Props) {
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => setMessages([])}
-                  className="px-2 py-1 rounded text-xs text-muted hover:text-white transition-colors"
+                  className="px-2 py-1 rounded text-xs text-muted hover:text-foreground transition-colors"
                 >
                   Clear
                 </button>
-                <button onClick={() => setOpen(false)} className="p-1.5 rounded-lg text-muted hover:text-white transition-colors">
+                <button onClick={() => setOpen(false)} className="p-1.5 rounded-lg text-muted hover:text-foreground transition-colors">
                   <ChevronDown size={14} />
                 </button>
               </div>
@@ -250,7 +250,7 @@ export default function ChatWindow({ workspaceId, disabled }: Props) {
                     <button
                       key={s}
                       onClick={() => send(s)}
-                      className="w-full text-left text-xs px-3 py-2.5 rounded-lg bg-card border border-border text-muted hover:text-white hover:border-primary/40 transition-all"
+                      className="w-full text-left text-xs px-3 py-2.5 rounded-lg bg-card border border-border text-muted hover:text-foreground hover:border-primary/40 transition-all"
                     >
                       {s}
                     </button>
@@ -282,7 +282,7 @@ export default function ChatWindow({ workspaceId, disabled }: Props) {
                       )}
 
                       {/* Answer text */}
-                      <p className="text-sm text-white leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                      <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">{msg.content}</p>
 
                       {/* Citations */}
                       {msg.evidence && msg.evidence.length > 0 && (
@@ -314,7 +314,7 @@ export default function ChatWindow({ workspaceId, disabled }: Props) {
                   onKeyDown={handleKey}
                   placeholder="Ask about coverage, risks, gaps…"
                   rows={1}
-                  className="flex-1 bg-transparent text-sm text-white placeholder-muted outline-none resize-none leading-5 max-h-28"
+                  className="flex-1 bg-transparent text-sm text-foreground placeholder-muted outline-none resize-none leading-5 max-h-28"
                 />
                 <button
                   onClick={() => send(input)}

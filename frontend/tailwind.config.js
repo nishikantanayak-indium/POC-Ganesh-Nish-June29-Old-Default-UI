@@ -4,17 +4,17 @@ export default {
   theme: {
     extend: {
       colors: {
-        bg: '#09090f',
-        surface: '#111118',
-        card: '#16161f',
-        border: '#252535',
-        primary: '#6366f1',
-        'primary-dim': '#4f46e5',
-        success: '#10b981',
-        warning: '#f59e0b',
-        danger: '#ef4444',
-        purple: '#8b5cf6',
-        muted: '#94a3b8',
+        bg:           'var(--bg)',
+        surface:      'var(--surface)',
+        card:         'var(--card)',
+        border:       'var(--border)',
+        foreground:   'var(--foreground)',
+        muted:        'var(--muted)',
+        primary:      'var(--primary)',
+        'primary-dim':'var(--primary-dim)',
+        success:      'var(--success)',
+        warning:      'var(--warning)',
+        danger:       'var(--danger)',
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],

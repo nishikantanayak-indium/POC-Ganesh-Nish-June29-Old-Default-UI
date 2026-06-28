@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
-import { Upload, FileText, X, ChevronDown, ChevronUp, Play, RotateCcw } from 'lucide-react'
+import { Upload, FileText, X, ChevronDown, ChevronUp, Play, RotateCcw, Zap } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import clsx from 'clsx'
 
@@ -193,7 +193,7 @@ function JobCard({ job }: { job: PipelineJob }) {
           {/* Header row */}
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs font-mono text-muted">
-              <span className="text-sm font-semibold text-white">Run #{job.runNumber}</span>
+              <span className="text-sm font-semibold text-foreground">Run #{job.runNumber}</span>
               <span>·</span>
               <span>{job.files.length} file{job.files.length !== 1 ? 's' : ''}</span>
               <span>·</span>
@@ -251,7 +251,7 @@ function JobCard({ job }: { job: PipelineJob }) {
           {/* Log toggle */}
           <button
             onClick={() => setLogsOpen(v => !v)}
-            className="flex items-center gap-1.5 text-xs text-muted hover:text-white transition-colors"
+            className="flex items-center gap-1.5 text-xs text-muted hover:text-foreground transition-colors"
           >
             {logsOpen ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
             <span className="font-mono">
@@ -409,138 +409,244 @@ export default function WorkflowPanel({
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-6 py-6 space-y-5">
+    <div className="h-full flex flex-col overflow-hidden">
 
-        {/* Header */}
-        <div>
-          <h2 className="text-base font-semibold text-white">Ingestion Pipeline</h2>
-          <p className="text-xs text-muted mt-0.5">
-            Upload procurement documents — pipeline runs async and streams logs in real time.
-          </p>
-        </div>
-
-        {/* Resume banner (only when no jobs yet this session) */}
-        {hasData && jobs.length === 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: -6 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 flex items-center justify-between gap-4"
-          >
-            <div>
-              <p className="text-sm font-medium text-white">Graph data already present</p>
-              <p className="text-xs text-muted mt-0.5">Resume from your last session or drop new documents below to extend it.</p>
-            </div>
-            <button
-              onClick={onLoadExisting}
-              className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-primary/20 text-primary hover:bg-primary/30 transition-colors font-medium"
-            >
-              <RotateCcw size={11} />
-              Resume
-            </button>
-          </motion.div>
-        )}
-
-        {/* Upload card */}
-        <div className="rounded-xl border border-border bg-card p-4 space-y-3">
-
-          {/* Drop zone */}
-          <div
-            onDragOver={e => { e.preventDefault(); setDragging(true) }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={handleDrop}
-            onClick={() => inputRef.current?.click()}
-            className={clsx(
-              'border-2 border-dashed rounded-xl p-5 cursor-pointer transition-all duration-200',
-              'flex items-center gap-4',
-              dragging
-                ? 'border-primary bg-primary/10'
-                : 'border-border/60 hover:border-primary/40 hover:bg-surface',
-            )}
-          >
-            <input
-              ref={inputRef}
-              type="file"
-              multiple
-              accept=".pdf,.docx,.doc"
-              className="hidden"
-              onChange={e => addFiles(e.target.files)}
-            />
-            <div className={clsx(
-              'w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-all',
-              dragging ? 'bg-primary' : 'bg-surface border border-border',
-            )}>
-              <Upload size={15} className={dragging ? 'text-white' : 'text-muted'} />
-            </div>
-            <div>
-              <p className="text-sm font-medium text-white">Drop files or click to browse</p>
-              <p className="text-xs text-muted">PDF, DOCX — RFP, Contract, Risk Sheet. Scanned PDFs supported via OCR.</p>
-            </div>
-          </div>
-
-          {/* File chips */}
-          <AnimatePresence>
-            {pendingFiles.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                className="overflow-hidden space-y-1.5"
-              >
-                {pendingFiles.map(f => (
-                  <div key={f.name} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface border border-border/60">
-                    <FileText size={12} className="text-primary shrink-0" />
-                    <span className="flex-1 text-xs font-mono text-white truncate">{f.name}</span>
-                    <span className="text-xs text-muted font-mono shrink-0">{fmtSize(f.size)}</span>
-                    <button
-                      onClick={e => { e.stopPropagation(); setPendingFiles(p => p.filter(x => x.name !== f.name)) }}
-                      className="text-border hover:text-danger transition-colors p-0.5 rounded"
-                    >
-                      <X size={11} />
-                    </button>
-                  </div>
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Run button */}
+      {/* ── Resume banner ───────────────────────────────────────────── */}
+      {hasData && jobs.length === 0 && (
+        <div className="shrink-0 border-b border-border px-6 py-3 flex items-center justify-between">
+          <span className="text-xs text-muted font-mono">Workspace already has graph data</span>
           <button
-            onClick={handleRun}
-            disabled={!pendingFiles.length}
-            className={clsx(
-              'w-full py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2',
-              pendingFiles.length
-                ? 'bg-primary hover:bg-primary/90 text-white shadow-lg shadow-primary/20'
-                : 'bg-surface text-muted cursor-not-allowed border border-border',
-            )}
+            onClick={onLoadExisting}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-primary/20 text-primary hover:bg-primary/10 transition-colors font-medium"
           >
-            <Play size={13} fill="currentColor" />
-            Run Pipeline{pendingFiles.length > 0 ? ` (${pendingFiles.length} file${pendingFiles.length !== 1 ? 's' : ''})` : ''}
+            <RotateCcw size={11} />
+            Load into view
           </button>
         </div>
+      )}
 
-        {/* Job history */}
-        {jobs.length > 0 && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between px-0.5">
-              <p className="text-xs font-semibold text-muted uppercase tracking-widest">Pipeline Runs</p>
-              <div className="flex items-center gap-2 text-xs font-mono">
-                {runningJobs > 0 && (
-                  <span className="flex items-center gap-1 text-primary">
-                    <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                    {runningJobs} running
-                  </span>
-                )}
-                <span className="text-muted">
-                  {jobs.filter(j => j.status === 'complete').length}/{jobs.length} complete
-                </span>
-              </div>
-            </div>
-            {jobs.map(job => <JobCard key={job.id} job={job} />)}
+      {/* ── Two-column body ─────────────────────────────────────────── */}
+      <div className="flex-1 overflow-hidden grid grid-cols-[2fr_3fr] divide-x divide-border">
+
+        {/* ── LEFT: Documents ─────────────────────────────────────── */}
+        <div className="flex flex-col overflow-hidden">
+          <div className="px-5 pt-5 pb-3 border-b border-border shrink-0 flex items-center gap-2">
+            <FileText size={13} className="text-muted" />
+            <span className="text-xs font-semibold text-muted uppercase tracking-widest">Documents</span>
           </div>
-        )}
 
+          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+            {/* Drop zone */}
+            <div
+              onDragOver={e => { e.preventDefault(); setDragging(true) }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={handleDrop}
+              onClick={() => inputRef.current?.click()}
+              className={clsx(
+                'border-2 border-dashed rounded-xl p-6 cursor-pointer transition-all duration-200 flex flex-col items-center justify-center gap-2 text-center',
+                dragging
+                  ? 'border-primary bg-primary/10'
+                  : 'border-border hover:border-primary/40 hover:bg-card',
+              )}
+            >
+              <input ref={inputRef} type="file" multiple accept=".pdf,.docx,.doc"
+                className="hidden" onChange={e => addFiles(e.target.files)} />
+              <div className={clsx(
+                'w-10 h-10 rounded-xl flex items-center justify-center transition-all',
+                dragging ? 'bg-primary' : 'bg-card border border-border',
+              )}>
+                <Upload size={16} className={dragging ? 'text-white' : 'text-muted'} />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-foreground">Drop files here</p>
+                <p className="text-xs text-muted mt-0.5">PDF or DOCX — RFP, Contract, Risk Sheet</p>
+              </div>
+              <p className="text-[11px] text-muted/60 font-mono">Scanned PDFs supported via OCR</p>
+            </div>
+
+            {/* File queue */}
+            <AnimatePresence>
+              {pendingFiles.map(f => (
+                <motion.div key={f.name}
+                  initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -8 }}
+                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-card border border-border group"
+                >
+                  <div className="w-7 h-7 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+                    <FileText size={12} className="text-primary" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-mono text-foreground truncate">{f.name}</p>
+                    <p className="text-[11px] text-muted">{fmtSize(f.size)}</p>
+                  </div>
+                  <button
+                    onClick={e => { e.stopPropagation(); setPendingFiles(p => p.filter(x => x.name !== f.name)) }}
+                    className="opacity-0 group-hover:opacity-100 text-border hover:text-danger transition-all p-1 rounded"
+                  >
+                    <X size={11} />
+                  </button>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+
+            {pendingFiles.length === 0 && (
+              <p className="text-xs text-muted/50 text-center py-4">No files selected</p>
+            )}
+          </div>
+
+          {/* Run button */}
+          <div className="px-5 py-4 border-t border-border shrink-0">
+            <button
+              onClick={handleRun}
+              disabled={!pendingFiles.length}
+              className={clsx(
+                'w-full py-3 rounded-xl text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2',
+                pendingFiles.length
+                  ? 'bg-primary hover:bg-primary-dim text-white shadow-lg shadow-primary/20 hover:shadow-primary/30'
+                  : 'bg-card text-muted cursor-not-allowed border border-border',
+              )}
+            >
+              <Play size={13} fill={pendingFiles.length ? 'white' : 'currentColor'} />
+              {pendingFiles.length
+                ? `Run Pipeline — ${pendingFiles.length} file${pendingFiles.length !== 1 ? 's' : ''}`
+                : 'Run Pipeline'}
+            </button>
+          </div>
+        </div>
+
+        {/* ── RIGHT: Pipeline + History ────────────────────────────── */}
+        <div className="flex flex-col overflow-hidden">
+          {/* Section header */}
+          <div className="px-5 pt-5 pb-3 border-b border-border shrink-0 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Zap size={13} className="text-muted" />
+              <span className="text-xs font-semibold text-muted uppercase tracking-widest">Pipeline</span>
+            </div>
+            {runningJobs > 0 && (
+              <div className="flex items-center gap-1.5 text-xs text-primary font-mono">
+                <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                Running
+              </div>
+            )}
+            {jobs.length > 0 && runningJobs === 0 && (
+              <span className="text-xs text-muted font-mono">
+                {jobs.filter(j => j.status === 'complete').length}/{jobs.length} complete
+              </span>
+            )}
+          </div>
+
+          {/* Scrollable content: stepper + activity + run history */}
+          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
+
+            {/* ── Current run stepper ─────────────────────────────── */}
+            {(() => {
+              const activeJob = [...jobs].reverse().find(j => j.status === 'running') ?? jobs[jobs.length - 1]
+              const steps = activeJob?.steps ?? freshSteps()
+              return (
+                <div className="space-y-1">
+                  {STEP_DEFS.map((def, i) => {
+                    const step = steps.find(s => s.id === def.id)
+                    const status = step?.status ?? 'idle'
+                    const isLast = i === STEP_DEFS.length - 1
+                    return (
+                      <div key={def.id} className="flex gap-3">
+                        <div className="flex flex-col items-center w-8 shrink-0">
+                          <div className={clsx(
+                            'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all',
+                            status === 'idle'         && 'bg-card border-border text-muted',
+                            status === 'running'      && 'bg-primary/20 border-primary text-primary animate-pulse',
+                            status === 'coordinating' && 'bg-amber-500/10 border-amber-500/50 text-amber-400',
+                            status === 'complete'     && 'bg-success/15 border-success text-success',
+                            status === 'error'        && 'bg-danger/15 border-danger text-danger',
+                            status === 'skipped'      && 'bg-card border-border text-muted',
+                          )}>
+                            {status === 'complete' ? '✓' : status === 'error' ? '✗' :
+                             status === 'running' ? def.icon : status === 'coordinating' ? '⏳' : `${i + 1}`}
+                          </div>
+                          {!isLast && (
+                            <div className={clsx('w-0.5 flex-1 min-h-[20px] mt-1',
+                              status === 'complete' ? 'bg-success/30' : 'bg-border')} />
+                          )}
+                        </div>
+                        <div className={clsx('flex-1 pb-4', isLast && 'pb-1')}>
+                          <div className="flex items-center justify-between">
+                            <span className={clsx('text-sm font-medium',
+                              status === 'idle'     ? 'text-muted' : 'text-foreground',
+                              status === 'running'  && 'text-primary',
+                            )}>
+                              {def.label}
+                            </span>
+                            <span className="text-xs font-mono text-muted">
+                              {step?.elapsed !== undefined ? `${step.elapsed}s` : ''}
+                              {step?.count !== undefined && status === 'complete' ? ` · ${step.count} items` : ''}
+                            </span>
+                          </div>
+                          {step?.message && status !== 'idle' && (
+                            <p className={clsx('text-xs mt-0.5 font-mono',
+                              status === 'error' ? 'text-danger' :
+                              status === 'coordinating' ? 'text-amber-400' : 'text-muted')}>
+                              {step.message}
+                            </p>
+                          )}
+                          {status === 'running' && step?.progress && step.progress.total > 0 && (
+                            <div className="mt-1.5 h-1 bg-card rounded-full overflow-hidden">
+                              <motion.div className="h-full bg-primary rounded-full"
+                                initial={{ width: 0 }}
+                                animate={{ width: `${Math.round((step.progress.current / step.progress.total) * 100)}%` }}
+                                transition={{ duration: 0.4 }} />
+                            </div>
+                          )}
+                          {status === 'idle' && (
+                            <p className="text-xs text-muted/40 mt-0.5 font-mono">waiting</p>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })()}
+
+            {/* ── Activity (last log lines of active job) ──────────── */}
+            {(() => {
+              const activeJob = [...jobs].reverse().find(j => j.status === 'running') ?? jobs[jobs.length - 1]
+              if (!activeJob || activeJob.logs.length === 0) return null
+              return (
+                <div className="rounded-xl border border-border p-3 space-y-1">
+                  <p className="text-[10px] font-semibold text-muted/60 uppercase tracking-widest mb-2">Activity</p>
+                  {activeJob.logs.slice(-5).map((log, i) => (
+                    <p key={i} className={clsx('text-[11px] font-mono leading-relaxed',
+                      log.level === 'success' ? 'text-success' :
+                      log.level === 'error'   ? 'text-danger' : 'text-muted')}>
+                      {log.msg}
+                    </p>
+                  ))}
+                </div>
+              )
+            })()}
+
+            {/* ── Run history ──────────────────────────────────────── */}
+            {jobs.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-[10px] font-semibold text-muted/60 uppercase tracking-widest">Run History</span>
+                  <span className="text-[10px] text-muted/40 font-mono">({jobs.length})</span>
+                </div>
+                <div className="space-y-2">
+                  {[...jobs].reverse().map(job => (
+                    <JobCard key={job.id} job={job} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── Idle placeholder ─────────────────────────────────── */}
+            {jobs.length === 0 && (
+              <div className="rounded-xl border border-dashed border-border p-5 text-center">
+                <p className="text-xs text-muted">Select documents and run the pipeline to begin analysis</p>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   )

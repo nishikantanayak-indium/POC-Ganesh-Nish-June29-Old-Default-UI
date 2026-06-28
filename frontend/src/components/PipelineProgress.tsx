@@ -16,7 +16,7 @@ export default function PipelineProgress({ steps }: Props) {
     <div className="max-w-2xl mx-auto">
       <div className="mb-6">
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-base font-semibold text-white">Pipeline Progress</h2>
+          <h2 className="text-base font-semibold text-foreground">Pipeline Progress</h2>
           <span className="text-sm font-mono text-muted">{completed}/{total}</span>
         </div>
         <div className="h-1.5 bg-card rounded-full overflow-hidden border border-border">
@@ -71,7 +71,7 @@ function StepCard({ step, index }: { step: PipelineStep; index: number }) {
           <div className="flex items-center justify-between gap-2">
             <span className={clsx(
               'text-sm font-medium',
-              isComplete ? 'text-white' : isRunning ? 'text-white' : 'text-muted',
+              isComplete ? 'text-foreground' : isRunning ? 'text-foreground' : 'text-muted',
             )}>
               {step.label}
             </span>

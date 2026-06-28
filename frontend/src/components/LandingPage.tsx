@@ -1,6 +1,8 @@
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { Network, GitBranch, MessageSquare, Zap, ArrowRight, FolderOpen } from 'lucide-react'
+import GraphRAGLogo from './GraphRAGLogo'
+import ThemeToggle from './ThemeToggle'
 
 const FEATURES = [
   {
@@ -30,6 +32,8 @@ export default function LandingPage() {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-bg px-6 relative overflow-hidden">
+      {/* Theme toggle — fixed top-right */}
+      <div className="absolute top-4 right-4 z-20"><ThemeToggle /></div>
       {/* Background grid */}
       <div
         className="absolute inset-0 opacity-[0.03]"
@@ -59,7 +63,7 @@ export default function LandingPage() {
           transition={{ delay: 0.1, duration: 0.4 }}
           className="w-16 h-16 rounded-2xl bg-primary/20 border border-primary/30 flex items-center justify-center mb-6 shadow-lg shadow-primary/10"
         >
-          <Network size={28} className="text-primary" />
+          <GraphRAGLogo size={36} className="text-primary" />
         </motion.div>
 
         {/* Title */}
@@ -67,7 +71,7 @@ export default function LandingPage() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.2 }}
-          className="text-5xl font-bold text-white tracking-tight mb-2"
+          className="text-5xl font-bold text-foreground tracking-tight mb-2"
         >
           GraphRAG
         </motion.h1>
@@ -103,7 +107,7 @@ export default function LandingPage() {
             >
               <div className="mt-0.5 shrink-0">{f.icon}</div>
               <div>
-                <p className="text-white text-sm font-semibold mb-0.5">{f.title}</p>
+                <p className="text-foreground text-sm font-semibold mb-0.5">{f.title}</p>
                 <p className="text-muted text-xs leading-relaxed">{f.desc}</p>
               </div>
             </div>
