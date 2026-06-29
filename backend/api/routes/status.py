@@ -43,6 +43,7 @@ async def get_elements(workspace_id: str) -> dict:
                     "id": e.id, "type": e.type.value, "text": e.text,
                     "source": e.source, "document_id": e.document_id,
                     "confidence": e.confidence,
+                    "page_number": e.metadata.get("page_number"),
                 }
                 for e in elements
             ]

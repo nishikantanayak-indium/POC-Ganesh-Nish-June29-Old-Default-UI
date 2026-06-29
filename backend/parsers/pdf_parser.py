@@ -8,6 +8,13 @@ Two-pass extraction:
 2. OCR fallback via Tesseract when a page yields < 20 characters — handles
    fully scanned PDFs like government RFPs that contain only image layers.
 
+Table extraction:
+- ``page.find_tables()`` is called on every page (PyMuPDF >= 1.23).
+- Extracted tables are stored as :class:`~core.models.ExtractedTable` objects
+  in :attr:`~core.models.ParsedDocument.page_contents`.
+- A markdown rendering of each table is also appended to the page text so
+  the LLM extractor sees structured data rather than fragmented cell text.
+
 OCR quality filters:
 - Pages where > 40 % of characters are non-ASCII are skipped (handles mixed
   Korean/CJK pages that tesseract renders as garbage).
@@ -26,7 +33,7 @@ import fitz  # PyMuPDF
 
 from core.exceptions import ParseError
 from core.interfaces import IParser
-from core.models import DocumentType, ParsedDocument
+from core.models import DocumentType, ExtractedTable, PageContent, ParsedDocument
 
 logger = logging.getLogger(__name__)
 
@@ -76,13 +83,194 @@ def _ocr_page(page: fitz.Page, dpi: int = 150) -> str:
     return text
 
 
+def _get_vertical_lines(page: fitz.Page) -> list[tuple[float, float, float]]:
+    """Return ``(x, y0, y1)`` for every vertical ruling line on the page.
+
+    Deduplicates lines within 3 pt of each other (handles line borders drawn
+    as thin filled rectangles with left-edge and right-edge very close).
+    """
+    raw: list[tuple[float, float, float]] = []
+    for path in page.get_drawings():
+        rect = fitz.Rect(path.get("rect", (0, 0, 0, 0)))
+        w = rect.x1 - rect.x0
+        h = rect.y1 - rect.y0
+        if w < 3 and h > 15:           # thin, tall → vertical line
+            mid_x = (rect.x0 + rect.x1) / 2
+            raw.append((mid_x, rect.y0, rect.y1))
+
+    # Sort by X and deduplicate within 3 pt
+    raw.sort()
+    deduped: list[tuple[float, float, float]] = []
+    for x, y0, y1 in raw:
+        if deduped and abs(x - deduped[-1][0]) < 3:
+            # Extend the existing entry to cover the full Y span
+            px, py0, py1 = deduped[-1]
+            deduped[-1] = (px, min(py0, y0), max(py1, y1))
+        else:
+            deduped.append((x, y0, y1))
+    return deduped
+
+
+def _extract_text_in_rect(
+    blocks: list[dict], rect: fitz.Rect
+) -> str:
+    """Return all text from *blocks* whose centre-line falls within *rect*."""
+    lines: list[str] = []
+    for block in blocks:
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            bbox = line.get("bbox", (0, 0, 0, 0))
+            line_x = bbox[0]
+            line_y = (bbox[1] + bbox[3]) / 2
+            if rect.x0 <= line_x <= rect.x1 and rect.y0 <= line_y <= rect.y1:
+                parts = [
+                    s.get("text", "").strip()
+                    for s in line.get("spans", [])
+                    if s.get("text", "").strip()
+                ]
+                if parts:
+                    lines.append(" ".join(parts))
+    return "\n".join(lines)
+
+
+def _reconstruct_table_with_ruling_lines(
+    page: fitz.Page,
+    table_obj,                     # PyMuPDF Table object from find_tables()
+    v_lines: list[tuple[float, float, float]],  # all page vertical lines
+    page_num: int,
+) -> "ExtractedTable | None":
+    """Reconstruct a table using vertical ruling lines as column boundaries.
+
+    ``find_tables()`` correctly detects ROW heights but can miss columns when
+    a vertical divider only spans part of the table (e.g. a sub-box in the
+    top row).  We override column detection with ALL vertical lines that
+    overlap the table's Y range.
+    """
+    try:
+        bbox = table_obj.bbox          # (x0, y0, x1, y1)
+        cells_obj = table_obj.cells    # list[Rect | None], row-major
+    except Exception:
+        return None
+
+    tab_y0, tab_y1 = bbox[1], bbox[3]
+
+    # ── Column boundaries from vertical lines overlapping the table ────────
+    # Include every vertical line whose Y span overlaps the table's Y range.
+    col_xs = [
+        x for x, vy0, vy1 in v_lines
+        if vy0 < tab_y1 and vy1 > tab_y0
+    ]
+    if len(col_xs) < 2:
+        return None
+
+    col_xs = sorted(set(round(x, 1) for x in col_xs))
+
+    # Column regions: between adjacent vertical lines
+    col_regions = [(col_xs[i], col_xs[i + 1]) for i in range(len(col_xs) - 1)]
+
+    # ── Row boundaries from detected cells (these are accurate) ───────────
+    y_vals: set[float] = {round(tab_y0, 1), round(tab_y1, 1)}
+    for cell_rect in cells_obj:
+        if cell_rect is not None:
+            r = fitz.Rect(cell_rect)
+            y_vals.add(round(r.y0, 1))
+            y_vals.add(round(r.y1, 1))
+    row_bounds = sorted(y_vals)
+
+    # ── Pre-fetch all text blocks for the page (one call, reused per cell) ─
+    all_blocks: list[dict] = page.get_text("dict")["blocks"]
+
+    # ── Build grid ─────────────────────────────────────────────────────────
+    grid: list[list[str]] = []
+    for i in range(len(row_bounds) - 1):
+        y_top = row_bounds[i] - 1
+        y_bot = row_bounds[i + 1] + 1
+
+        row: list[str] = []
+        for cx0, cx1 in col_regions:
+            cell_rect = fitz.Rect(cx0 - 1, y_top, cx1 + 1, y_bot)
+            cell_text = _extract_text_in_rect(all_blocks, cell_rect)
+            row.append(cell_text)
+
+        if any(row):
+            grid.append(row)
+
+    if not grid:
+        return None
+
+    return ExtractedTable(page=page_num, headers=grid[0], rows=grid[1:])
+
+
+def _extract_page_tables(page: fitz.Page, page_num: int) -> list[ExtractedTable]:
+    """Extract structured tables from *page*.
+
+    Strategy (in order):
+    1. Use ``find_tables()`` to locate table areas and row structure.
+    2. Use PDF drawing paths (vertical ruling lines) to determine the TRUE
+       column boundaries — ``find_tables()`` sometimes misses a column when
+       its divider line only spans part of the table height (e.g. a sub-box
+       nested in one row).  Ruling-line detection gives exact column regions.
+    3. Extract cell text by querying each [col_x0..col_x1] × [row_y0..row_y1]
+       rectangle, which properly handles multi-line cells.
+
+    Falls back to the simpler ``extract()`` approach for tables that have no
+    detectable ruling lines (text-based tables, e.g. from DOCX-converted PDFs).
+    """
+    tables: list[ExtractedTable] = []
+    try:
+        tab_finder = page.find_tables()
+        if not tab_finder.tables:
+            return tables
+
+        v_lines = _get_vertical_lines(page)
+
+        for t in tab_finder.tables:
+            # Prefer ruling-line reconstruction when lines are available
+            table = _reconstruct_table_with_ruling_lines(page, t, v_lines, page_num)
+
+            if table is None:
+                # Fallback: use find_tables()'s own cell extraction
+                cells = t.extract()
+                if not cells:
+                    continue
+                headers = [str(c or "").strip() for c in cells[0]]
+                rows = [[str(c or "").strip() for c in row] for row in cells[1:]]
+                all_cells = headers + [cell for row in rows for cell in row]
+                if any(all_cells):
+                    table = ExtractedTable(page=page_num, headers=headers, rows=rows)
+
+            if table is not None:
+                # Skip tables that are entirely empty
+                all_text = table.headers + [c for row in table.rows for c in row]
+                if any(all_text):
+                    tables.append(table)
+
+    except Exception:
+        pass
+    return tables
+
+
+def _table_to_markdown(table: ExtractedTable) -> str:
+    """Convert *table* to a GitHub-flavoured Markdown table string."""
+    if not table.headers:
+        return ""
+    lines: list[str] = []
+    lines.append("| " + " | ".join(table.headers or ["Col1"]) + " |")
+    lines.append("| " + " | ".join("---" for _ in table.headers) + " |")
+    for row in table.rows:
+        padded = list(row) + [""] * max(0, len(table.headers) - len(row))
+        lines.append("| " + " | ".join(padded[: len(table.headers)]) + " |")
+    return "\n".join(lines)
+
+
 class PDFParser(IParser):
     """Parse PDF files into :class:`~core.models.ParsedDocument` objects.
 
     Parameters
     ----------
     ocr_dpi:
-        Resolution used when rendering scanned pages for OCR (default 200 DPI).
+        Resolution used when rendering scanned pages for OCR (default 150 DPI).
         Higher values improve accuracy at the cost of speed.
     non_ascii_threshold:
         Pages where the fraction of non-ASCII characters exceeds this value
@@ -110,7 +298,8 @@ class PDFParser(IParser):
         filename: str,
         progress_cb=None,
     ) -> ParsedDocument:
-        """Extract text from every page, falling back to OCR for scanned pages.
+        """Extract text and tables from every page, falling back to OCR for
+        scanned pages.
 
         Parameters
         ----------
@@ -118,11 +307,16 @@ class PDFParser(IParser):
             Open binary stream of the PDF, positioned at byte 0.
         filename:
             Original filename; used to derive the document type and ID.
+        progress_cb:
+            Optional callable that receives progress strings for real-time
+            streaming to the UI (e.g. OCR page progress).
 
         Returns
         -------
         ParsedDocument
             One entry in ``pages`` per page that yields usable text.
+            ``page_contents`` carries native text, OCR text, and any
+            extracted tables for each corresponding page.
 
         Raises
         ------
@@ -138,6 +332,7 @@ class PDFParser(IParser):
         ocr_available = _check_tesseract()
         total_pages = pdf_doc.page_count
         pages: list[str] = []
+        page_contents: list[PageContent] = []
         ocr_count = 0
         skipped_count = 0
 
@@ -147,16 +342,20 @@ class PDFParser(IParser):
 
         for page_num, page in enumerate(pdf_doc, start=1):
             # ── Pass 1: native text ────────────────────────────────────
-            text: str = page.get_text("text")
+            native_text: str = page.get_text("text").strip()
+
+            # ── Table extraction (works on PDF text layer) ─────────────
+            page_tables = _extract_page_tables(page, page_num)
 
             # ── Pass 2: OCR fallback for image-only pages ──────────────
-            if len(text.strip()) < 20:
+            ocr_text: str = ""
+            if len(native_text) < 20:
                 if not ocr_available:
                     continue  # can't OCR, skip blank page
                 try:
                     if progress_cb:
                         progress_cb(f"  OCR page {page_num}/{total_pages}…")
-                    text = _ocr_page(page, dpi=self.ocr_dpi)
+                    ocr_text = _ocr_page(page, dpi=self.ocr_dpi).strip()
                     ocr_count += 1
                 except Exception as exc:
                     logger.warning(
@@ -164,13 +363,15 @@ class PDFParser(IParser):
                     )
                     continue
 
+            # Best available text for quality filtering
+            best_text = ocr_text if ocr_text else native_text
+
             # ── Quality filters ────────────────────────────────────────
-            stripped = text.strip()
-            if len(stripped) < 20:
+            if len(best_text) < 20:
                 skipped_count += 1
                 continue
 
-            if _non_ascii_ratio(stripped) > self.non_ascii_threshold:
+            if _non_ascii_ratio(best_text) > self.non_ascii_threshold:
                 logger.debug(
                     "Skipping page %d of '%s' (high non-ASCII ratio — likely CJK/form)",
                     page_num,
@@ -179,7 +380,21 @@ class PDFParser(IParser):
                 skipped_count += 1
                 continue
 
-            pages.append(stripped)
+            # ── Enrich text with structured table markdown ─────────────
+            # Appending markdown tables gives the LLM a structured view of
+            # tabular data that page.get_text() renders as fragmented cells.
+            full_text = best_text
+            if page_tables:
+                tables_md = "\n\n".join(_table_to_markdown(t) for t in page_tables)
+                full_text = best_text + "\n\n[TABLES]\n" + tables_md
+
+            pages.append(full_text)
+            page_contents.append(PageContent(
+                page_num=page_num,
+                native_text=native_text,
+                ocr_text=ocr_text,
+                tables=page_tables,
+            ))
 
         if ocr_count:
             logger.info(
@@ -206,6 +421,7 @@ class PDFParser(IParser):
             type=doc_type,
             pages=pages,
             total_pages=len(pages),
+            page_contents=page_contents,
         )
 
 

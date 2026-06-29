@@ -7,7 +7,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import pipeline, graph, traceability, chat, status, workspaces
+from api.routes import pipeline, graph, traceability, chat, status, workspaces, documents
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ app.include_router(graph.router)
 app.include_router(traceability.router)
 app.include_router(chat.router)
 app.include_router(status.router)
+app.include_router(documents.router)
 
 
 @app.on_event("startup")

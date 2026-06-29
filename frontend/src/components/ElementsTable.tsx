@@ -147,7 +147,12 @@ export default function ElementsTable({ elements }: Props) {
                   <td className="text-sm text-muted max-w-xs">
                     <span className="line-clamp-1">{e.text}</span>
                   </td>
-                  <td className="text-xs text-muted font-mono whitespace-nowrap">{e.source}</td>
+                  <td className="text-xs text-muted font-mono">
+                    <span className="block">{e.source.split(' — ')[0]}</span>
+                    {e.source.split(' — ')[1] && (
+                      <span className="block opacity-60 text-[10px]">{e.source.split(' — ').slice(1).join(' — ')}</span>
+                    )}
+                  </td>
                   <td className="font-mono text-xs text-muted text-right">
                     {((e.confidence ?? 1) * 100).toFixed(0)}%
                   </td>
@@ -157,9 +162,12 @@ export default function ElementsTable({ elements }: Props) {
                     <td />
                     <td colSpan={5} className="py-3 px-4">
                       <p className="text-sm text-foreground leading-relaxed mb-2">{e.text}</p>
-                      <div className="flex items-center gap-4 text-xs text-muted">
+                      <div className="flex items-center gap-4 text-xs text-muted flex-wrap">
                         <span className="font-mono">doc: {e.document_id}</span>
                         <span className="font-mono">src: {e.source}</span>
+                        {e.page_number != null && (
+                          <span className="font-mono">page: {e.page_number}</span>
+                        )}
                         <span className="font-mono">conf: {((e.confidence ?? 1) * 100).toFixed(1)}%</span>
                       </div>
                     </td>

@@ -359,7 +359,7 @@ class LLMExtractor(IExtractor):
                 id=elem_id,
                 type=self._type_str_to_enum(e["type"]),
                 text=e["text"],
-                source=e.get("source", doc.name),
+                source=f"{doc.name} — {section_label} (p.{page_number})",
                 document_id=doc.id,
                 confidence=float(e.get("confidence", 1.0)),
             )

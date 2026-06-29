@@ -95,9 +95,16 @@ function EvidenceCard({ item, index }: { item: EvidenceItem; index: number }) {
             {expanded ? text : shortText}
           </p>
 
-          {/* Source */}
-          {source && (
-            <p className="text-xs text-slate-600 font-mono mt-1">{source}</p>
+          {/* Source + page */}
+          {(source || item.page_number != null) && (
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
+              {source && <p className="text-xs text-slate-600 font-mono">{source}</p>}
+              {item.page_number != null && (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-border/20 text-slate-500">
+                  p.{item.page_number}
+                </span>
+              )}
+            </div>
           )}
         </div>
 

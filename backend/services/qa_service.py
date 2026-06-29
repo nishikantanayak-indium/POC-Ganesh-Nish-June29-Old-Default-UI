@@ -172,15 +172,19 @@ class QAService:
         """Return evidence for requirements with no contract-clause coverage."""
         coverage = self.builder.assess_coverage()
         uncovered = [c for c in coverage if c.status == CoverageStatus.NOT_COVERED]
-        return [
-            {
+        evidence = []
+        for c in uncovered:
+            req = self.store.get_element(c.requirement_id)
+            item: dict[str, Any] = {
                 "id": c.requirement_id,
                 "text": c.requirement_text,
                 "status": c.status.value,
                 "source": c.source,
             }
-            for c in uncovered
-        ]
+            if req and req.metadata.get("page_number") is not None:
+                item["page_number"] = req.metadata["page_number"]
+            evidence.append(item)
+        return evidence
 
     def _gather_risk_for_partial_evidence(self) -> list[dict[str, Any]]:
         """Return risks associated with partially-covered requirements."""
@@ -191,14 +195,15 @@ class QAService:
             for risk_id in c.risks:
                 risk = self.store.get_element(risk_id)
                 if risk is not None:
-                    evidence.append(
-                        {
-                            "requirement": c.requirement_id,
-                            "risk_id": risk_id,
-                            "risk_text": risk.text,
-                            "source": risk.source,
-                        }
-                    )
+                    item: dict[str, Any] = {
+                        "requirement": c.requirement_id,
+                        "risk_id": risk_id,
+                        "risk_text": risk.text,
+                        "source": risk.source,
+                    }
+                    if risk.metadata.get("page_number") is not None:
+                        item["page_number"] = risk.metadata["page_number"]
+                    evidence.append(item)
         return evidence
 
     def _gather_no_mitigation_evidence(self) -> list[dict[str, Any]]:
@@ -211,9 +216,10 @@ class QAService:
                 r.type == RelationshipType.MITIGATED_BY for r in outgoing
             )
             if not has_mitigation:
-                evidence.append(
-                    {"id": risk.id, "text": risk.text, "source": risk.source}
-                )
+                item: dict[str, Any] = {"id": risk.id, "text": risk.text, "source": risk.source}
+                if risk.metadata.get("page_number") is not None:
+                    item["page_number"] = risk.metadata["page_number"]
+                evidence.append(item)
         return evidence
 
     def _gather_no_ld_evidence(self) -> list[dict[str, Any]]:
@@ -224,9 +230,10 @@ class QAService:
             outgoing = self.store.get_outgoing_relationships(risk.id, None)
             has_ld = any(r.type == RelationshipType.LINKED_TO_LD for r in outgoing)
             if not has_ld:
-                evidence.append(
-                    {"id": risk.id, "text": risk.text, "source": risk.source}
-                )
+                item: dict[str, Any] = {"id": risk.id, "text": risk.text, "source": risk.source}
+                if risk.metadata.get("page_number") is not None:
+                    item["page_number"] = risk.metadata["page_number"]
+                evidence.append(item)
         return evidence
 
     def _gather_general_evidence(self, question: str) -> list[dict[str, Any]]:
@@ -244,14 +251,15 @@ class QAService:
                 question, n_results=5
             )
             for e in vec_results:
-                evidence.append(
-                    {
-                        "id": e.id,
-                        "type": e.type.value,
-                        "text": e.text,
-                        "source": e.source,
-                    }
-                )
+                item: dict[str, Any] = {
+                    "id": e.id,
+                    "type": e.type.value,
+                    "text": e.text,
+                    "source": e.source,
+                }
+                if e.metadata.get("page_number") is not None:
+                    item["page_number"] = e.metadata["page_number"]
+                evidence.append(item)
         except Exception as exc:
             logger.warning("Vector search failed: %s", exc)
 

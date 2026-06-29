@@ -17,6 +17,7 @@ export interface GraphNode {
   source: string
   document_id: string
   confidence?: number
+  page_number?: number
 }
 
 export interface GraphEdge {
@@ -117,11 +118,35 @@ export interface PipelineSummary {
   elapsed: number
 }
 
+// ── Document explorer types ───────────────────────────────────────────────────
+
+export interface ExtractedTable {
+  page: number
+  headers: string[]
+  rows: string[][]
+}
+
+export interface PageContent {
+  page_num: number
+  native_text: string
+  ocr_text: string
+  tables: ExtractedTable[]
+}
+
+export interface DocumentContent {
+  id: string
+  name: string
+  type: string
+  total_pages: number
+  page_contents: PageContent[]
+}
+
 export interface EvidenceItem {
   id?: string
   type?: string
   text?: string
   source?: string
+  page_number?: number
   status?: string
   requirement?: string
   risk_id?: string

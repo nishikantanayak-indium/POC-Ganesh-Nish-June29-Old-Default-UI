@@ -14,6 +14,7 @@ uniqueness constraint (if present) and creates a composite
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Optional
 
@@ -81,7 +82,8 @@ class Neo4jGraphStore(IGraphStore):
             "    e.document_id = $document_id, "
             "    e.confidence = $confidence, "
             "    e.metadata = $metadata, "
-            "    e.section = $section"
+            "    e.section = $section, "
+            "    e.page_number = $page_number"
         )
         try:
             with self._driver.session(database=self._db) as s:
@@ -92,6 +94,7 @@ class Neo4jGraphStore(IGraphStore):
                     confidence=element.confidence,
                     metadata=str(element.metadata),
                     section=element.metadata.get("section", ""),
+                    page_number=element.metadata.get("page_number"),
                 )
         except Exception as exc:
             raise GraphStoreError(f"Failed to add element '{element.id}': {exc}") from exc
@@ -350,11 +353,40 @@ class Neo4jGraphStore(IGraphStore):
         except Exception as exc:
             raise GraphStoreError(f"Failed to fetch document hashes: {exc}") from exc
 
+    def get_document_contents(self, workspace_id: str) -> list[dict]:
+        """Return all ingested documents with their parsed page content for the UI explorer."""
+        try:
+            with self._driver.session(database=self._db) as s:
+                result = s.run(
+                    "MATCH (e:Element {workspace_id: $wid, type: 'Document'}) "
+                    "RETURN e.id AS id, e.text AS name, e.source AS doc_type, "
+                    "       e.pages_json AS pages_json",
+                    wid=workspace_id,
+                )
+                docs = []
+                for record in result:
+                    raw = record.get("pages_json") or "[]"
+                    try:
+                        page_contents = json.loads(raw)
+                    except Exception:
+                        page_contents = []
+                    docs.append({
+                        "id": record["id"],
+                        "name": record["name"],
+                        "type": record["doc_type"],
+                        "total_pages": len(page_contents),
+                        "page_contents": page_contents,
+                    })
+                return docs
+        except Exception as exc:
+            raise GraphStoreError(f"Failed to fetch document contents: {exc}") from exc
+
     def get_graph_for_visualization(self, workspace_id: str) -> dict:
         nodes_query = (
             "MATCH (e:Element {workspace_id: $wid}) "
             "RETURN e.id AS id, e.type AS type, e.text AS text, "
-            "       e.source AS source, e.document_id AS doc_id"
+            "       e.source AS source, e.document_id AS doc_id, "
+            "       e.page_number AS page_number"
         )
         edges_query = (
             "MATCH (a:Element {workspace_id: $wid})-[r]->(b:Element {workspace_id: $wid}) "

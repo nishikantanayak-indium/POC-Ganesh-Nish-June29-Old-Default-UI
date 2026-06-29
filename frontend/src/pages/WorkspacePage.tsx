@@ -8,15 +8,15 @@ import KnowledgeMapLogo from '../components/KnowledgeMapLogo'
 import ThemeToggle from '../components/ThemeToggle'
 import WorkflowPanel from '../components/WorkflowPanel'
 import KnowledgeGraph from '../components/KnowledgeGraph'
-import ElementsTable from '../components/ElementsTable'
+import ElementsView from '../components/ElementsView'
 import TraceabilityView from '../components/TraceabilityView'
 import ChatWindow from '../components/ChatWindow'
 import { ToastContainer, useToast } from '../components/Toast'
 import { usePipelineStore, useWorkspaceJobs } from '../store/pipelineStore'
 import {
-  fetchStatus, fetchElements, fetchCoverage, resetGraph, fetchWorkspace,
+  fetchStatus, fetchElements, fetchCoverage, resetGraph, fetchWorkspace, fetchDocuments,
 } from '../api/client'
-import type { AppStatus, GraphNode, CoverageResult, SSEEvent } from '../types'
+import type { AppStatus, GraphNode, CoverageResult, DocumentContent, SSEEvent } from '../types'
 
 type Tab = 'ingest' | 'elements' | 'graph' | 'traceability'
 
@@ -52,6 +52,7 @@ export default function WorkspacePage() {
   const [workspaceName, setWorkspaceName] = useState('')
   const [elements, setElements]     = useState<GraphNode[]>([])
   const [coverage, setCoverage]     = useState<CoverageResult[]>([])
+  const [documents, setDocuments]   = useState<DocumentContent[]>([])
   const [graphRefresh, setGraphRefresh] = useState(0)
   const [preloading, setPreloading] = useState(false)
   const [resetConfirm, setResetConfirm] = useState(false)
@@ -64,14 +65,16 @@ export default function WorkspacePage() {
   const loadData = useCallback(async () => {
     setPreloading(true)
     try {
-      const [elems, cov, st] = await Promise.allSettled([
+      const [elems, cov, st, docs] = await Promise.allSettled([
         fetchElements(workspaceId),
         fetchCoverage(workspaceId),
         fetchStatus(workspaceId),
+        fetchDocuments(workspaceId),
       ])
       if (elems.status === 'fulfilled') setElements(elems.value)
-      if (cov.status  === 'fulfilled') setCoverage(cov.value)
-      if (st.status   === 'fulfilled') setStatus(st.value)
+      if (cov.status   === 'fulfilled') setCoverage(cov.value)
+      if (st.status    === 'fulfilled') setStatus(st.value)
+      if (docs.status  === 'fulfilled') setDocuments(docs.value)
       if (elems.status === 'fulfilled' && elems.value.length > 0) setGraphRefresh(n => n + 1)
     } finally {
       setPreloading(false)
@@ -111,6 +114,7 @@ export default function WorkspacePage() {
     setResetConfirm(false)
     setElements([])
     setCoverage([])
+    setDocuments([])
     setStatus({ has_data: false, nodes: 0, edges: 0, type_counts: {} })
     setGraphRefresh(n => n + 1)
     usePipelineStore.getState().clearJobs(workspaceId)
@@ -249,7 +253,7 @@ export default function WorkspacePage() {
 
         {visitedTabs.has('elements') && (
           <div style={tabStyle('elements')}>
-            <ElementsTable elements={elements} />
+            <ElementsView elements={elements} documents={documents} loading={preloading} />
           </div>
         )}
 

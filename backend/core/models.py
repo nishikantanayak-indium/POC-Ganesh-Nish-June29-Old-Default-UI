@@ -120,20 +120,45 @@ class Relationship:
 
 
 @dataclass
+class ExtractedTable:
+    """A structured table extracted from a single document page."""
+
+    page: int            # 1-indexed page number
+    headers: List[str]   # Column headers (first row of the table)
+    rows: List[List[str]]  # Data rows (all rows after the header)
+
+
+@dataclass
+class PageContent:
+    """Rich per-page content captured during parsing."""
+
+    page_num: int       # 1-indexed
+    native_text: str    # Text extracted directly from the PDF text layer
+    ocr_text: str       # OCR result; empty string when native text was used
+    tables: List[ExtractedTable] = field(default_factory=list)
+
+
+@dataclass
 class ParsedDocument:
     """
     Raw parsed representation of a source document.
 
-    ``pages`` holds the extracted text for each page (1-indexed by
+    ``pages`` holds the best available text for each page (1-indexed by
     convention: ``pages[0]`` is page 1).  For documents without page
     boundaries a single-element list is acceptable.
+
+    ``page_contents`` carries richer per-page data (native text, OCR text,
+    extracted tables).  It is optional and populated only by parsers that
+    support it (currently PDFParser).  When populated it is parallel to
+    ``pages`` — ``page_contents[i]`` corresponds to ``pages[i]``.
     """
 
     id: str
     name: str
     type: DocumentType
-    pages: List[str]        # One entry per page; may be empty strings for blanks
+    pages: List[str]           # Best text per page (OCR if scanned, native otherwise)
     total_pages: int
+    page_contents: List[PageContent] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.total_pages != len(self.pages):

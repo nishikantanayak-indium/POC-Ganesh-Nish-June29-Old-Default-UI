@@ -6,6 +6,7 @@ the same Neo4jGraphStore singleton without cross-contamination.
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -43,9 +44,21 @@ class GraphBuilder:
         for doc in documents:
             self.store.clear_document(doc.id, workspace_id)
 
-        # Document pseudo-nodes
+        # Document pseudo-nodes — store rich page content for the UI explorer
         _hashes = doc_hashes or {}
         for doc in documents:
+            pages_data = [
+                {
+                    "page_num": pc.page_num,
+                    "native_text": pc.native_text,
+                    "ocr_text": pc.ocr_text,
+                    "tables": [
+                        {"page": t.page, "headers": t.headers, "rows": t.rows}
+                        for t in pc.tables
+                    ],
+                }
+                for pc in doc.page_contents
+            ]
             with self.store._driver.session(database=self.store._db) as s:
                 s.run(
                     "MERGE (e:Element {id: $id, workspace_id: $wid}) "
@@ -54,10 +67,12 @@ class GraphBuilder:
                     "    e.source = $src, "
                     "    e.document_id = $did, "
                     "    e.confidence = 1.0, "
-                    "    e.doc_hash = $hash",
+                    "    e.doc_hash = $hash, "
+                    "    e.pages_json = $pages_json",
                     id=doc.id, wid=workspace_id,
                     text=doc.name, src=doc.type.value,
                     did=doc.id, hash=_hashes.get(doc.id, ""),
+                    pages_json=json.dumps(pages_data),
                 )
 
         for elem in elements:

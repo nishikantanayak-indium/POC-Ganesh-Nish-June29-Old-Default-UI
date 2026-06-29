@@ -705,7 +705,14 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
               </button>
             </div>
             <p className="text-muted text-xs leading-relaxed mb-3">{selectedNode.text as string}</p>
-            <p className="text-xs text-border font-mono">{selectedNode.source as string}</p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-xs text-border font-mono">{selectedNode.source as string}</p>
+              {(selectedNode.page_number as number | undefined) != null && (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-border/20 text-slate-500">
+                  p.{selectedNode.page_number as number}
+                </span>
+              )}
+            </div>
             <p className="text-xs text-slate-600 font-mono mt-1">{selectedNode.document_id as string}</p>
           </motion.div>
         )}
