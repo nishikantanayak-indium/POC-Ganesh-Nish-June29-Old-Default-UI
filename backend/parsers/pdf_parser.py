@@ -65,22 +65,113 @@ def _non_ascii_ratio(text: str) -> float:
     return non_ascii / len(text)
 
 
-def _ocr_page(page: fitz.Page, dpi: int = 150) -> str:
-    """Render *page* to a grayscale image and OCR it with Tesseract.
-
-    Grayscale at 150 DPI uses ~6× less memory than RGB at 200 DPI while
-    keeping text quality sufficient for standard RFP/contract documents.
-    """
-    import pytesseract
+def _render_page_image(page: fitz.Page, dpi: int = 150):
+    """Render *page* to a PIL Image (RGB, suitable for both OCR and table detection)."""
     from PIL import Image
-
     scale = dpi / 72
     mat = fitz.Matrix(scale, scale)
-    # Grayscale pixmap: 1 byte per pixel vs 3 for RGB — faster and lighter
-    pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
-    img = Image.open(io.BytesIO(pix.tobytes("png")))
+    pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+    return Image.open(io.BytesIO(pix.tobytes("png")))
+
+
+def _ocr_page(page: fitz.Page, dpi: int = 150) -> tuple[str, object]:
+    """Render *page* and OCR it with Tesseract.
+
+    Returns ``(text, pil_image)`` so callers can reuse the rendered image
+    for table detection without re-rendering.
+    """
+    import pytesseract
+    img = _render_page_image(page, dpi)
     text: str = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
-    return text
+    return text, img
+
+
+def _extract_scanned_tables(img, page_num: int) -> list[ExtractedTable]:
+    """Extract tables from a raster page image using img2table + Tesseract.
+
+    Used when the page is scanned (no PDF vector paths for the drawing-based
+    extractor).  img2table detects table cell borders from pixel edges via
+    OpenCV; Tesseract fills each cell with its OCR'd text.
+    """
+    try:
+        from img2table.document import Image as Img2TableImage
+        from img2table.ocr import TesseractOCR
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        doc = Img2TableImage(src=buf.getvalue())
+
+        extracted = doc.extract_tables(
+            ocr=TesseractOCR(),
+            implicit_rows=True,
+            borderless_tables=False,
+        )
+        if not extracted:
+            return []
+
+        tables: list[ExtractedTable] = []
+        for tbl in extracted:
+            if tbl.df.empty:
+                continue
+            df = tbl.df
+
+            def _clean(v: object) -> str:
+                s = str(v).strip()
+                return "" if s in ("nan", "None") else s
+
+            all_rows = [[_clean(cell) for cell in row] for row in df.values.tolist()]
+
+            import re as _re
+            _ref_pattern = _re.compile(r'^\d[\d.]*$')  # "1", "1.1", "2.3.4" etc.
+
+            def _is_ref_cell(s: str) -> bool:
+                """True when col-0 looks like a paragraph/section number."""
+                return bool(_ref_pattern.match(s.strip()))
+
+            # Merge consecutive rows into the previous row when col-0 is either
+            # empty OR is a plain word (not a section-ref number).  This handles
+            # two common scanned-table cases:
+            #   • Multi-line data cells where the continuation row has no key
+            #   • Header rows whose label wraps across two lines
+            #     (e.g. "Paragraph" / "Reference" split by img2table)
+            merged: list[list[str]] = []
+            for row in all_rows:
+                col0 = row[0] if row else ""
+                is_continuation = (
+                    merged
+                    and any(row)
+                    and not _is_ref_cell(col0)
+                    and (not col0 or not _is_ref_cell(col0))
+                    and (not col0 or len(col0.split()) <= 2)  # short word(s), not a sentence
+                    and col0 == col0  # always true — guard against future changes
+                )
+                # Refine: only merge if col0 is empty OR is a short word continuation
+                is_continuation = merged and any(row) and (
+                    not col0  # empty col-0 → continuation
+                    or (not _is_ref_cell(col0) and len(col0.split()) <= 2 and len(col0) < 20)
+                )
+                if is_continuation:
+                    prev = merged[-1]
+                    for ci in range(len(prev)):
+                        extra = row[ci] if ci < len(row) else ""
+                        if extra:
+                            prev[ci] = (prev[ci] + " " + extra).strip()
+                elif any(row):
+                    merged.append(list(row))
+
+            if len(merged) < 1:
+                continue
+
+            # First non-empty row is headers
+            headers = merged[0]
+            data_rows = merged[1:]
+
+            all_text = headers + [c for row in data_rows for c in row]
+            if any(t.strip() for t in all_text):
+                tables.append(ExtractedTable(page=page_num, headers=headers, rows=data_rows))
+        return tables
+    except Exception:
+        return []
 
 
 def _get_vertical_lines(page: fitz.Page) -> list[tuple[float, float, float]]:
@@ -344,24 +435,33 @@ class PDFParser(IParser):
             # ── Pass 1: native text ────────────────────────────────────
             native_text: str = page.get_text("text").strip()
 
-            # ── Table extraction (works on PDF text layer) ─────────────
-            page_tables = _extract_page_tables(page, page_num)
-
             # ── Pass 2: OCR fallback for image-only pages ──────────────
             ocr_text: str = ""
-            if len(native_text) < 20:
+            page_image = None  # rendered PIL image, reused for scanned table extraction
+            is_scanned = len(native_text) < 20
+
+            if is_scanned:
                 if not ocr_available:
                     continue  # can't OCR, skip blank page
                 try:
                     if progress_cb:
                         progress_cb(f"  OCR page {page_num}/{total_pages}…")
-                    ocr_text = _ocr_page(page, dpi=self.ocr_dpi).strip()
+                    ocr_text, page_image = _ocr_page(page, dpi=self.ocr_dpi)
+                    ocr_text = ocr_text.strip()
                     ocr_count += 1
                 except Exception as exc:
                     logger.warning(
                         "OCR failed for page %d of '%s': %s", page_num, filename, exc
                     )
                     continue
+
+            # ── Table extraction ───────────────────────────────────────
+            # Digital pages: use PDF vector paths (fast, accurate).
+            # Scanned pages: use pixel-based border detection via img2table.
+            if is_scanned and page_image is not None:
+                page_tables = _extract_scanned_tables(page_image, page_num)
+            else:
+                page_tables = _extract_page_tables(page, page_num)
 
             # Best available text for quality filtering
             best_text = ocr_text if ocr_text else native_text
