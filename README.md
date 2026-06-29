@@ -91,8 +91,16 @@ All nodes land in **Neo4j**, scoped to the workspace. Typed edges (`COVERS`, `PA
 ```
 1  Parse          PDF/DOCX → text pages
                   ┌ Digital PDF  → PyMuPDF native text extraction
-                  └ Scanned PDF  → PyMuPDF render at 150 DPI grayscale → Tesseract OCR
-                    Per-page OCR progress streams live to the UI
+                  │               Tables: find_tables() row boundaries +
+                  │               get_drawings() ruling lines → column reconstruction
+                  ├ Scanned PDF  → PyMuPDF render at 150 DPI grayscale → Tesseract OCR
+                  │               Tables: img2table (OpenCV pixel-edge border detection)
+                  │               + TesseractOCR cell fill; multi-line cell merge heuristic
+                  │               Per-page OCR progress streams live to the UI
+                  └ DOCX         → python-docx body order traversal (paragraphs + tables)
+                                  Tables: merged-cell dedup + column normalization
+                  All tables appended as GFM markdown to page text for the LLM extractor
+                  page_contents (page_num, native_text, ocr_text, tables) stored per page
                   Pages with >40% non-ASCII are dropped (garbled OCR filter)
                   SHA-256 dedup skips already-ingested files
 
@@ -129,6 +137,7 @@ All nodes land in **Neo4j**, scoped to the workspace. Typed edges (`COVERS`, `PA
 | Embeddings | BAAI/bge-m3 (sentence-transformers, 1024-dim) |
 | Workspace metadata | PostgreSQL 16 (psycopg2) |
 | OCR | Tesseract 5.x + pytesseract + PyMuPDF rendering at 150 DPI grayscale (scanned PDF fallback, per-page live progress) |
+| Scanned table extraction | img2table + OpenCV (pixel-edge border detection → cell extraction from rendered page images) |
 
 ---
 
@@ -154,6 +163,8 @@ sudo apt-get install tesseract-ocr
 ```
 
 > Tesseract is only needed for scanned (image-based) PDFs. Digital PDFs and DOCX files work without it.
+
+> `img2table` (for scanned PDF table extraction) is included in `backend/requirements.txt` — no separate install needed.
 
 ### API keys
 
@@ -327,8 +338,9 @@ GraphRAG POC/
 │   │   └── exceptions.py
 │   │
 │   ├── parsers/
-│   │   ├── pdf_parser.py           ← Two-pass: PyMuPDF native → Tesseract OCR fallback
-│   │   └── docx_parser.py
+│   │   ├── pdf_parser.py           ← Digital: PyMuPDF native text + ruling-line table reconstruction
+│   │   │                             Scanned: Tesseract OCR + img2table pixel-edge table extraction
+│   │   └── docx_parser.py          ← Body-order traversal; paragraph + table extraction (python-docx)
 │   │
 │   ├── extractors/llm_extractor.py ← Section-aware chunking → GPT-4o function calling
 │   │
@@ -366,11 +378,12 @@ GraphRAG POC/
 │           ├── WorkflowPanel.tsx   ← Upload zone + SSE pipeline trigger + run history
 │           ├── KnowledgeGraph.tsx  ← React Flow + d3-force/dagre + cross-doc sidebar
 │           ├── ElementsTable.tsx   ← Filterable/sortable elements table
+│           ├── ElementsView.tsx    ← Split-panel document viewer (left doc nav + right Text/OCR/Tables/Elements modes)
 │           ├── TraceabilityView.tsx← 4-column card layout, INTER/INTRA badges
 │           ├── ChatWindow.tsx      ← Floating chat + evidence source cards
 │           ├── PipelineProgress.tsx← Step stepper UI
 │           ├── UploadZone.tsx      ← Drag-and-drop file zone
-│           ├── GraphRAGLogo.tsx    ← SVG logo component
+│           ├── KnowledgeMapLogo.tsx← SVG logo component
 │           ├── ThemeToggle.tsx     ← Dark/light mode toggle button
 │           └── Toast.tsx           ← Toast notification system
 │
@@ -412,7 +425,7 @@ The right column shows a **step stepper**, live activity log, and **Run History*
 
 #### Elements tab
 
-Filterable table of all extracted elements. Filter by type pill, search by text/ID/source, sort any column, expand a row for full content and metadata.
+Split-panel document viewer. The **left rail** (~208 px) shows a document selector — filename, type, and page count. The **right area** has a mode bar at the top with **[Text] [OCR] [Tables]** content buttons and an **[Elements · N]** button, plus scrollable page chips (amber dot on chips that have tables or OCR content). The content area is full-width: text and OCR are shown as readable prose; tables are rendered with proper column widths and cell padding. The **Elements** mode shows a filterable, sortable table of all extracted elements with type pills, search by text/ID/source, and row expansion for full metadata.
 
 #### Graph tab
 
@@ -517,6 +530,8 @@ docker compose ps   # confirm postgres shows "healthy"
 ### Scanned PDF extracts nothing
 
 Check Tesseract: `tesseract --version`. Install with `brew install tesseract` (macOS) or `sudo apt-get install tesseract-ocr`.
+
+For **table extraction** from scanned pages, `img2table` is used automatically when available (it is listed in `backend/requirements.txt`). If tables are still not appearing, confirm the package installed correctly: `pip show img2table`. If `img2table` is unavailable the pipeline falls back gracefully — text OCR will still work, but table structure will not be recovered from scanned pages.
 
 ### "Neo4j: Connection refused"
 
