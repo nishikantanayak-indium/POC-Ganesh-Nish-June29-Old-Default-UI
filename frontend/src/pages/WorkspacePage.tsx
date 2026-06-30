@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
-import { Network, Upload, GitBranch, Zap, Trash2, ArrowLeft } from 'lucide-react'
+import { Network, Upload, GitBranch, Zap, Trash2, ArrowLeft, MessageSquare } from 'lucide-react'
 import { motion } from 'framer-motion'
 import clsx from 'clsx'
 
@@ -26,6 +26,10 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'graph',         label: 'Graph',         icon: <Network size={14} /> },
   { id: 'traceability',  label: 'Traceability',  icon: <GitBranch size={14} /> },
 ]
+
+function chatPath(workspaceId: string) {
+  return `/workspace/${workspaceId}/chat`
+}
 
 function tabPath(workspaceId: string, tab: Tab) {
   return `/workspace/${workspaceId}/${tab}`
@@ -229,6 +233,20 @@ export default function WorkspacePage() {
             </button>
           )
         })}
+
+        {/* Chat — navigates to standalone chat page */}
+        <button
+          onClick={() => hasData && navigate(chatPath(workspaceId))}
+          disabled={!hasData}
+          style={{ color: !hasData ? 'var(--border)' : 'var(--muted)', borderBottomColor: 'transparent' }}
+          className={clsx(
+            'flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-all border-b-2 -mb-px',
+            !hasData ? 'cursor-not-allowed' : 'hover:brightness-125',
+          )}
+        >
+          <MessageSquare size={14} />
+          Chat
+        </button>
 
         {pipelineRunning && (
           <div className="ml-auto mb-1 flex items-center gap-1.5 text-xs text-primary font-mono">

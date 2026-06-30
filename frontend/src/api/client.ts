@@ -1,6 +1,7 @@
 import type {
   AppStatus, CoverageResult, GraphData, TraceabilityChain,
   GraphNode, EvidenceItem, Workspace, CrossDocRelationship, DocumentContent,
+  Conversation, ConversationMessage,
 } from '../types'
 
 const BASE = ''  // vite proxy forwards /api → localhost:8000
@@ -116,6 +117,61 @@ export async function fetchDocuments(workspaceId: string): Promise<DocumentConte
   if (!r.ok) throw new Error(await r.text())
   const data = await r.json()
   return data.documents
+}
+
+// ── Chat conversations ────────────────────────────────────────────────────────
+
+export async function fetchConversations(workspaceId: string): Promise<Conversation[]> {
+  const r = await fetch(`${ws(workspaceId)}/chat/conversations`)
+  if (!r.ok) throw new Error(await r.text())
+  const data = await r.json()
+  return data.conversations
+}
+
+export async function createConversation(workspaceId: string, title = 'New conversation'): Promise<Conversation> {
+  const r = await fetch(`${ws(workspaceId)}/chat/conversations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function renameConversation(workspaceId: string, convId: string, title: string): Promise<Conversation> {
+  const r = await fetch(`${ws(workspaceId)}/chat/conversations/${convId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function deleteConversation(workspaceId: string, convId: string): Promise<void> {
+  const r = await fetch(`${ws(workspaceId)}/chat/conversations/${convId}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error(await r.text())
+}
+
+export async function fetchMessages(workspaceId: string, convId: string): Promise<ConversationMessage[]> {
+  const r = await fetch(`${ws(workspaceId)}/chat/conversations/${convId}/messages`)
+  if (!r.ok) throw new Error(await r.text())
+  const data = await r.json()
+  return data.messages
+}
+
+export async function askInConversation(
+  workspaceId: string,
+  convId: string,
+  question: string,
+): Promise<{ answer: string; evidence: EvidenceItem[]; query_type: string }> {
+  const r = await fetch(`${ws(workspaceId)}/chat/conversations/${convId}/ask`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question }),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
 }
 
 export async function resetGraph(workspaceId: string): Promise<void> {
