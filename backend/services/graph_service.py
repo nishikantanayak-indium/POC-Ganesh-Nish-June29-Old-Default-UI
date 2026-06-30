@@ -11,7 +11,7 @@ import logging
 from typing import Any
 
 from core.models import AtomicElement, CoverageResult, ParsedDocument, Relationship
-from graph import GraphBuilder, GraphitiMemory, GraphVisualizer, Neo4jGraphStore
+from graph import GraphBuilder, GraphVisualizer, Neo4jGraphStore
 from vector import QdrantVectorStore
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,6 @@ class GraphService:
         self.workspace_id = workspace_id
         self.store = store
         self.vector_store = vector_store
-        self.graphiti = GraphitiMemory()
         self.builder = GraphBuilder(store)
         self.visualizer = GraphVisualizer(store)
 

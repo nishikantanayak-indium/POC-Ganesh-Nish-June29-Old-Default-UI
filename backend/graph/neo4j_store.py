@@ -401,6 +401,66 @@ class Neo4jGraphStore(IGraphStore):
         except Exception as exc:
             raise GraphStoreError(f"Failed to fetch graph for visualization: {exc}") from exc
 
+    def get_neighborhood(
+        self, element_id: str, workspace_id: str, max_neighbors: int = 6
+    ) -> list[dict]:
+        """Return up to *max_neighbors* directly connected nodes (CONTAINS excluded).
+
+        Each entry in the returned list contains:
+            id, type, text, source, page_number (optional),
+            rel_type, direction ('outgoing'|'incoming'), confidence
+        Results are sorted by relationship importance so the most informative
+        connections appear first.
+        """
+        out_q = (
+            "MATCH (seed:Element {id: $id, workspace_id: $wid})-[r]->(n:Element {workspace_id: $wid}) "
+            "WHERE type(r) <> 'CONTAINS' "
+            "RETURN n, type(r) AS rtype, 'outgoing' AS dir, coalesce(r.confidence, 1.0) AS conf"
+        )
+        in_q = (
+            "MATCH (n:Element {workspace_id: $wid})-[r]->(seed:Element {id: $id, workspace_id: $wid}) "
+            "WHERE type(r) <> 'CONTAINS' "
+            "RETURN n, type(r) AS rtype, 'incoming' AS dir, coalesce(r.confidence, 1.0) AS conf"
+        )
+        # Higher priority = appears earlier in the context window
+        rel_priority: dict[str, int] = {
+            "COVERS": 5, "PARTIALLY_COVERS": 4,
+            "MITIGATED_BY": 4, "LINKED_TO_LD": 3,
+            "INTRODUCES_RISK": 3, "CONTRADICTS": 2,
+        }
+        try:
+            rows: list[tuple] = []
+            with self._driver.session(database=self._db) as s:
+                for r in s.run(out_q, id=element_id, wid=workspace_id):
+                    rows.append((r["n"], r["rtype"], r["dir"], float(r["conf"] or 1.0)))
+                for r in s.run(in_q, id=element_id, wid=workspace_id):
+                    rows.append((r["n"], r["rtype"], r["dir"], float(r["conf"] or 1.0)))
+
+            rows.sort(key=lambda x: (rel_priority.get(x[1], 0), x[3]), reverse=True)
+
+            neighbors: list[dict] = []
+            for node, rtype, direction, conf in rows[:max_neighbors]:
+                if node is None:
+                    continue
+                elem = self._node_to_element(node)
+                nb: dict = {
+                    "id": elem.id,
+                    "type": elem.type.value,
+                    "text": elem.text,
+                    "source": elem.source,
+                    "rel_type": rtype,
+                    "direction": direction,
+                    "confidence": conf,
+                }
+                pn = elem.metadata.get("page_number")
+                if pn is not None:
+                    nb["page_number"] = pn
+                neighbors.append(nb)
+            return neighbors
+        except Exception as exc:
+            logger.warning("get_neighborhood failed for '%s': %s", element_id, exc)
+            return []
+
     def node_count(self, workspace_id: str) -> int:
         with self._driver.session(database=self._db) as s:
             result = s.run(

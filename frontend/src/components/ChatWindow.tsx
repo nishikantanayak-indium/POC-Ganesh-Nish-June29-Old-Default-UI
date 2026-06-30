@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { MessageSquare, Send, ChevronDown, ChevronUp, BookOpen } from 'lucide-react'
+import { MessageSquare, Send, ChevronDown, ChevronUp, BookOpen, GitBranch, ArrowRight } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import clsx from 'clsx'
 
 import { askQuestion } from '../api/client'
-import type { ChatMessage, EvidenceItem } from '../types'
+import type { ChatMessage, EvidenceItem, EvidenceConnection, CoverageSummary } from '../types'
 
 // ── Query type config ─────────────────────────────────────────────────────────
 const QUERY_TYPE: Record<string, { label: string; color: string; bg: string }> = {
@@ -12,10 +12,11 @@ const QUERY_TYPE: Record<string, { label: string; color: string; bg: string }> =
   risk_for_partial: { label: 'Risk / Partial',  color: '#f59e0b', bg: '#f59e0b15' },
   no_mitigation:    { label: 'No Mitigation',   color: '#8b5cf6', bg: '#8b5cf615' },
   no_ld:            { label: 'No LD',           color: '#6366f1', bg: '#6366f115' },
+  summary:          { label: 'Summary',         color: '#10b981', bg: '#10b98115' },
+  comparison:       { label: 'Comparison',      color: '#06b6d4', bg: '#06b6d415' },
   general:          { label: 'Semantic Search', color: '#10b981', bg: '#10b98115' },
 }
 
-// Element type → accent color (mirrors KnowledgeGraph TYPE_CONFIG)
 const TYPE_COLOR: Record<string, string> = {
   Requirement: '#6366f1',
   Clause:      '#10b981',
@@ -25,29 +26,170 @@ const TYPE_COLOR: Record<string, string> = {
   Document:    '#64748b',
 }
 
+const REL_LABEL: Record<string, string> = {
+  COVERS:           'covers',
+  PARTIALLY_COVERS: 'partially covers',
+  INTRODUCES_RISK:  'introduces risk',
+  MITIGATED_BY:     'mitigated by',
+  LINKED_TO_LD:     'linked to LD',
+  CONTRADICTS:      'contradicts',
+  CONTAINS:         'contains',
+}
+
 const SUGGESTIONS = [
+  'Give me an overall summary',
   'Which requirements are not covered?',
   'What risks have no mitigation?',
-  'Show risks for partially covered requirements',
-  'Which risks have no liquidated damages?',
+  'Compare the RFP requirements against the contract',
 ]
 
-// ── Evidence card ─────────────────────────────────────────────────────────────
+// ── Stat cell (used in summary card) ─────────────────────────────────────────
+function StatCell({ label, value, color = 'text-foreground' }: {
+  label: string; value: number; color?: string
+}) {
+  return (
+    <div className="flex flex-col items-center bg-bg rounded-lg px-2 py-1.5 min-w-0">
+      <span className={clsx('text-base font-bold font-mono tabular-nums', color)}>{value}</span>
+      <span className="text-[9px] text-muted text-center leading-tight mt-0.5">{label}</span>
+    </div>
+  )
+}
+
+// ── Connection row ────────────────────────────────────────────────────────────
+function ConnectionRow({ conn, depth = 0 }: { conn: EvidenceConnection; depth?: number }) {
+  const accent = conn.type ? (TYPE_COLOR[conn.type] ?? '#64748b') : '#64748b'
+  const relLabel = REL_LABEL[conn.rel] ?? conn.rel.toLowerCase().replace(/_/g, ' ')
+  const arrow = conn.direction === 'outgoing' ? '→' : '←'
+  const shortText = (conn.text ?? '').length > 90
+    ? (conn.text ?? '').slice(0, 90) + '…'
+    : (conn.text ?? '')
+
+  return (
+    <div style={{ paddingLeft: depth * 12 }}>
+      <div className="flex items-start gap-1.5 py-0.5">
+        <span className="shrink-0 text-[10px] text-muted font-mono w-3 text-center mt-0.5">{arrow}</span>
+        <span
+          className="shrink-0 text-[9px] font-mono px-1 py-0.5 rounded"
+          style={{ color: accent, background: `${accent}18` }}
+        >
+          {relLabel}
+        </span>
+        {conn.type && (
+          <span className="shrink-0 text-[9px] text-slate-500 font-mono">
+            [{conn.type}]
+          </span>
+        )}
+        <span className="text-[10px] text-slate-400 leading-tight min-w-0">{shortText}</span>
+        {conn.page_number != null && (
+          <span className="shrink-0 text-[9px] font-mono text-slate-600">p.{conn.page_number}</span>
+        )}
+      </div>
+      {conn.connections?.map((sub, i) => (
+        <ConnectionRow key={i} conn={sub} depth={depth + 1} />
+      ))}
+    </div>
+  )
+}
+
+// ── Summary card ──────────────────────────────────────────────────────────────
+function SummaryCard({ summary, index }: { summary: CoverageSummary; index: number }) {
+  const { requirements: r, risks: k } = summary
+  return (
+    <div className="rounded-lg bg-bg border border-border overflow-hidden"
+      style={{ borderLeft: '3px solid #10b981' }}>
+      <div className="px-3 py-2.5">
+        <div className="flex items-center gap-1.5 mb-2.5">
+          <span className="shrink-0 w-5 h-5 rounded-full bg-border/30 text-muted text-xs font-mono flex items-center justify-center">
+            {index + 1}
+          </span>
+          <span className="text-xs font-semibold text-emerald-400 font-mono">Coverage Summary</span>
+        </div>
+
+        {r && (
+          <div className="mb-2">
+            <p className="text-[9px] text-muted font-mono uppercase tracking-wide mb-1">Requirements</p>
+            <div className="grid grid-cols-4 gap-1">
+              <StatCell label="Total"       value={r.total} />
+              <StatCell label="Covered"     value={r.covered}           color="text-emerald-400" />
+              <StatCell label="Partial"     value={r.partially_covered} color="text-amber-400" />
+              <StatCell label="Not Covered" value={r.not_covered}       color="text-red-400" />
+            </div>
+          </div>
+        )}
+
+        {k && (
+          <div>
+            <p className="text-[9px] text-muted font-mono uppercase tracking-wide mb-1">Risks</p>
+            <div className="grid grid-cols-4 gap-1">
+              <StatCell label="Total"      value={k.total} />
+              <StatCell label="Mitigated"  value={k.mitigated}   color="text-emerald-400" />
+              <StatCell label="Unmitgated" value={k.unmitigated} color="text-red-400" />
+              <StatCell label="With LD"    value={k.with_ld}     color="text-purple-400" />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Cross-doc relationship card ───────────────────────────────────────────────
+function CrossDocCard({ item, index }: { item: EvidenceItem; index: number }) {
+  const relLabel = item.cross_doc_relationship
+    ? (REL_LABEL[item.cross_doc_relationship] ?? item.cross_doc_relationship.toLowerCase().replace(/_/g, ' '))
+    : ''
+
+  return (
+    <div className="rounded-lg bg-bg border border-border overflow-hidden"
+      style={{ borderLeft: '3px solid #06b6d4' }}>
+      <div className="px-3 py-2.5">
+        <div className="flex items-center gap-1.5 mb-2">
+          <span className="shrink-0 w-5 h-5 rounded-full bg-border/30 text-muted text-xs font-mono flex items-center justify-center">
+            {index + 1}
+          </span>
+          <GitBranch size={10} className="text-cyan-400 shrink-0" />
+          <span className="text-[10px] font-mono text-cyan-400">{relLabel}</span>
+        </div>
+
+        <div className="space-y-1.5 text-[10px]">
+          <div className="rounded bg-surface/60 px-2 py-1.5">
+            <p className="text-[9px] text-muted font-mono mb-0.5">FROM</p>
+            <p className="text-slate-300 leading-tight">{item.from?.text}</p>
+            <p className="text-slate-600 font-mono text-[9px] mt-0.5">{item.from?.source}</p>
+          </div>
+          <div className="flex justify-center">
+            <ArrowRight size={10} className="text-cyan-400/50" />
+          </div>
+          <div className="rounded bg-surface/60 px-2 py-1.5">
+            <p className="text-[9px] text-muted font-mono mb-0.5">TO</p>
+            <p className="text-slate-300 leading-tight">{item.to?.text}</p>
+            <p className="text-slate-600 font-mono text-[9px] mt-0.5">{item.to?.source}</p>
+          </div>
+          {item.evidence && (
+            <p className="text-slate-600 italic text-[9px] pt-0.5">{item.evidence}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Standard evidence card ────────────────────────────────────────────────────
 function EvidenceCard({ item, index }: { item: EvidenceItem; index: number }) {
   const [expanded, setExpanded] = useState(false)
 
-  // Normalise the different shapes the backend returns
-  const id     = item.id ?? item.risk_id ?? undefined
-  const type   = item.type ?? (item.risk_text ? 'Risk' : undefined)
-  const text   = item.text ?? item.risk_text ?? item.graphiti_fact ?? ''
-  const source = item.source ?? undefined
-  const reqRef = item.requirement ?? undefined
-  const status = item.status ?? undefined
+  const id      = item.id ?? item.risk_id ?? undefined
+  const type    = item.type ?? (item.risk_text ? 'Risk' : undefined)
+  const text    = item.text ?? item.risk_text ?? item.graphiti_fact ?? ''
+  const source  = item.source ?? undefined
+  const reqRef  = item.requirement ?? undefined
+  const status  = item.status ?? undefined
 
-  const accent = type ? (TYPE_COLOR[type] ?? '#64748b') : '#64748b'
+  const accent     = type ? (TYPE_COLOR[type] ?? '#64748b') : '#64748b'
   const isGraphiti = !id && !!item.graphiti_fact
-
-  const shortText = text.length > 100 ? text.slice(0, 100) + '…' : text
+  const hasConns   = (item.connections?.length ?? 0) > 0
+  const shortText  = text.length > 100 ? text.slice(0, 100) + '…' : text
+  const isExpandable = text.length > 100 || hasConns
 
   return (
     <div
@@ -55,16 +197,18 @@ function EvidenceCard({ item, index }: { item: EvidenceItem; index: number }) {
       style={{ borderLeft: `3px solid ${accent}` }}
     >
       <button
-        className="w-full text-left px-3 py-2.5 flex items-start gap-2 hover:bg-white/[0.02] transition-colors"
-        onClick={() => text.length > 100 && setExpanded(v => !v)}
+        className={clsx(
+          'w-full text-left px-3 py-2.5 flex items-start gap-2 transition-colors',
+          isExpandable && 'hover:bg-white/[0.02]',
+        )}
+        onClick={() => isExpandable && setExpanded(v => !v)}
       >
-        {/* Index badge */}
         <span className="shrink-0 w-5 h-5 rounded-full bg-border/30 text-muted text-xs font-mono flex items-center justify-center mt-0.5">
           {index + 1}
         </span>
 
         <div className="flex-1 min-w-0">
-          {/* Top row: type pill + ID + status */}
+          {/* Top row */}
           <div className="flex items-center gap-1.5 flex-wrap mb-1">
             {type && (
               <span
@@ -74,19 +218,17 @@ function EvidenceCard({ item, index }: { item: EvidenceItem; index: number }) {
                 {type}
               </span>
             )}
-            {id && (
-              <span className="text-xs font-mono text-slate-400">{id}</span>
-            )}
+            {id && <span className="text-xs font-mono text-slate-400">{id}</span>}
             {status && (
-              <span className="text-xs font-mono text-danger bg-danger/10 px-1.5 py-0.5 rounded">
-                {status}
+              <span className="text-xs font-mono text-danger bg-danger/10 px-1.5 py-0.5 rounded">{status}</span>
+            )}
+            {reqRef && <span className="text-xs text-muted font-mono">← {reqRef}</span>}
+            {isGraphiti && <span className="text-xs text-purple-400 font-mono">graphiti</span>}
+            {hasConns && !expanded && (
+              <span className="text-[9px] font-mono text-slate-600 flex items-center gap-0.5">
+                <GitBranch size={8} />
+                {item.connections!.length} link{item.connections!.length !== 1 ? 's' : ''}
               </span>
-            )}
-            {reqRef && (
-              <span className="text-xs text-muted font-mono">← {reqRef}</span>
-            )}
-            {isGraphiti && (
-              <span className="text-xs text-purple-400 font-mono">graphiti</span>
             )}
           </div>
 
@@ -106,9 +248,23 @@ function EvidenceCard({ item, index }: { item: EvidenceItem; index: number }) {
               )}
             </div>
           )}
+
+          {/* Graph connections — shown when expanded */}
+          {expanded && hasConns && (
+            <div className="mt-2 pt-2 border-t border-border/30">
+              <p className="text-[9px] text-muted font-mono uppercase tracking-wide mb-1.5 flex items-center gap-1">
+                <GitBranch size={8} /> Graph connections
+              </p>
+              <div className="space-y-0.5">
+                {item.connections!.map((conn, i) => (
+                  <ConnectionRow key={i} conn={conn} />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
-        {text.length > 100 && (
+        {isExpandable && (
           <span className="shrink-0 text-slate-600 mt-1">
             {expanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
           </span>
@@ -118,7 +274,7 @@ function EvidenceCard({ item, index }: { item: EvidenceItem; index: number }) {
   )
 }
 
-// ── Sources section (collapsible) ─────────────────────────────────────────────
+// ── Sources section ───────────────────────────────────────────────────────────
 function SourcesSection({ evidence }: { evidence: EvidenceItem[] }) {
   const [open, setOpen] = useState(false)
   if (evidence.length === 0) return null
@@ -144,9 +300,11 @@ function SourcesSection({ evidence }: { evidence: EvidenceItem[] }) {
             className="overflow-hidden"
           >
             <div className="mt-2 space-y-1.5">
-              {evidence.map((item, i) => (
-                <EvidenceCard key={i} item={item} index={i} />
-              ))}
+              {evidence.map((item, i) => {
+                if (item.summary)               return <SummaryCard    key={i} summary={item.summary} index={i} />
+                if (item.cross_doc_relationship) return <CrossDocCard   key={i} item={item} index={i} />
+                return                                  <EvidenceCard   key={i} item={item} index={i} />
+              })}
             </div>
           </motion.div>
         )}
@@ -155,14 +313,14 @@ function SourcesSection({ evidence }: { evidence: EvidenceItem[] }) {
   )
 }
 
-// ── Main component ─────────────────────────────────────────────────────────────
+// ── Main component ────────────────────────────────────────────────────────────
 interface Props { workspaceId: string; disabled?: boolean }
 
 export default function ChatWindow({ workspaceId, disabled }: Props) {
-  const [open, setOpen]       = useState(false)
+  const [open, setOpen]         = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [input, setInput]     = useState('')
-  const [loading, setLoading] = useState(false)
+  const [input, setInput]       = useState('')
+  const [loading, setLoading]   = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef  = useRef<HTMLTextAreaElement>(null)
 
@@ -268,14 +426,11 @@ export default function ChatWindow({ workspaceId, disabled }: Props) {
               {messages.map(msg => (
                 <div key={msg.id} className={clsx('flex', msg.role === 'user' ? 'justify-end' : 'justify-start')}>
                   {msg.role === 'user' ? (
-                    // User bubble
                     <div className="max-w-[80%] bg-primary text-white rounded-2xl rounded-br-sm px-3.5 py-2.5">
                       <p className="text-sm leading-relaxed">{msg.content}</p>
                     </div>
                   ) : (
-                    // AI bubble
                     <div className="max-w-[95%] bg-card border border-border rounded-2xl rounded-bl-sm px-3.5 py-3">
-                      {/* Query type tag */}
                       {msg.queryType && QUERY_TYPE[msg.queryType] && (
                         <div
                           className="inline-flex items-center gap-1.5 text-xs font-mono font-semibold px-2 py-0.5 rounded mb-2"
@@ -287,11 +442,7 @@ export default function ChatWindow({ workspaceId, disabled }: Props) {
                           {QUERY_TYPE[msg.queryType].label}
                         </div>
                       )}
-
-                      {/* Answer text */}
                       <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">{msg.content}</p>
-
-                      {/* Citations */}
                       {msg.evidence && msg.evidence.length > 0 && (
                         <SourcesSection evidence={msg.evidence} />
                       )}

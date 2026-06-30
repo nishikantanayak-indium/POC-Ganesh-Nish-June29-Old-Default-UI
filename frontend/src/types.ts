@@ -141,6 +141,22 @@ export interface DocumentContent {
   page_contents: PageContent[]
 }
 
+export interface EvidenceConnection {
+  id?: string
+  type?: string
+  text?: string
+  source?: string
+  page_number?: number
+  rel: string
+  direction: string
+  connections?: EvidenceConnection[]   // 2nd hop
+}
+
+export interface CoverageSummary {
+  requirements: { total: number; covered: number; partially_covered: number; not_covered: number }
+  risks: { total: number; mitigated: number; unmitigated: number; with_ld: number; without_ld: number }
+}
+
 export interface EvidenceItem {
   id?: string
   type?: string
@@ -153,6 +169,15 @@ export interface EvidenceItem {
   risk_text?: string
   graphiti_fact?: string
   uuid?: string
+  document_id?: string
+  connections?: EvidenceConnection[]
+  // summary intent
+  summary?: CoverageSummary
+  // comparison intent — explicit cross-doc edge
+  cross_doc_relationship?: string
+  from?: { id: string; text: string; source: string; doc: string }
+  to?: { id: string; text: string; source: string; doc: string }
+  evidence?: string
 }
 
 export interface ChatMessage {

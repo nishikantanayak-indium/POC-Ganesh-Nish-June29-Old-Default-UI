@@ -66,7 +66,7 @@ def render(get_graph_service) -> None:
         with st.spinner("Querying graph and generating answer…"):
             try:
                 gs = get_graph_service()
-                qa = QAService(gs.store, gs.builder, gs.graphiti, gs.vector_store)
+                qa = QAService(gs.store, gs.builder, gs.vector_store, gs.workspace_id)
                 result = qa.answer(question)
                 st.session_state["chat_history"].insert(
                     0, {"question": question, "result": result}

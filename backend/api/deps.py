@@ -65,7 +65,7 @@ def get_graph_service(workspace_id: str) -> GraphService:
 
 def get_qa_service(workspace_id: str) -> QAService:
     gs = get_graph_service(workspace_id)
-    return QAService(gs.store, gs.builder, gs.graphiti, gs.vector_store)
+    return QAService(gs.store, gs.builder, gs.vector_store, workspace_id)
 
 
 def evict_workspace(workspace_id: str) -> None:
