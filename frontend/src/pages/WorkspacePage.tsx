@@ -22,7 +22,7 @@ type Tab = 'ingest' | 'elements' | 'graph' | 'traceability'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'ingest',        label: 'Ingest',        icon: <Upload size={14} /> },
-  { id: 'elements',      label: 'Elements',      icon: <Zap size={14} /> },
+  { id: 'elements',      label: 'Explorer',      icon: <Zap size={14} /> },
   { id: 'graph',         label: 'Graph',         icon: <Network size={14} /> },
   { id: 'traceability',  label: 'Traceability',  icon: <GitBranch size={14} /> },
 ]
