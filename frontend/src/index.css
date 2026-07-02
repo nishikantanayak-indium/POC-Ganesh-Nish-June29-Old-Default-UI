@@ -5,10 +5,10 @@
 /* ── Dark theme (default) ─────────────────────────────────────────────── */
 :root, [data-theme="dark"] {
   color-scheme: dark;
-  --bg:           #09090f;
+  --bg:           #08080c;
   --surface:      #111118;
-  --card:         #16161f;
-  --border:       #252535;
+  --card:         #1c1c26;
+  --border:       #323248;
   --foreground:   #f1f5f9;
   --muted:        #94a3b8;
   --primary:      #6366f1;
@@ -37,6 +37,25 @@
   --rel-linked-to-ld:     var(--primary);
   --rel-contradicts:      var(--chart-3);
   --rel-contains:         var(--muted);
+  /* High-contrast text color to pair with a SOLID type/rel color as a badge
+     background (never draw type-color text on a type-color-tinted chip —
+     same hue at any tint still fails contrast). Verified against every
+     type and rel color above; primary is the one dark-mode exception
+     needing white instead of near-black. */
+  --ink-strong:        #0b0e17;
+  --type-requirement-ink: #ffffff;
+  --type-clause-ink:      var(--ink-strong);
+  --type-risk-ink:        var(--ink-strong);
+  --type-mitigation-ink:  var(--ink-strong);
+  --type-ld-ink:          var(--ink-strong);
+  --type-document-ink:    var(--ink-strong);
+  --rel-covers-ink:          var(--type-clause-ink);
+  --rel-partial-covers-ink:  var(--type-mitigation-ink);
+  --rel-introduces-risk-ink: var(--type-risk-ink);
+  --rel-mitigated-by-ink:    var(--type-ld-ink);
+  --rel-linked-to-ld-ink:    var(--type-requirement-ink);
+  --rel-contradicts-ink:     var(--ink-strong);
+  --rel-contains-ink:        var(--type-document-ink);
 }
 
 /* ── Light theme ──────────────────────────────────────────────────────── */
@@ -47,16 +66,26 @@
   --card:         #eef1fb;
   --border:       #d8ddf0;
   --foreground:   #0f172a;
-  --muted:        #64748b;
+  --muted:        #475569;
   --primary:      #4f46e5;
   --primary-dim:  #4338ca;
-  --success:      #059669;
-  --warning:      #d97706;
-  --danger:       #dc2626;
+  --success:      #047857;
+  --warning:      #b45309;
+  --danger:       #b91c1c;
   --chart-1:      #2a78d6;
   --chart-2:      #1baf7a;
   --chart-3:      #eb6834;
   --chart-4:      #4a3aa7;
+  /* Light-mode type/rel colors are all darkened for AA text contrast (see
+     above), so white ink reads well on every one of them — no per-type
+     split needed here the way dark mode requires. */
+  --ink-strong:           #ffffff;
+  --type-clause-ink:      #ffffff;
+  --type-risk-ink:        #ffffff;
+  --type-mitigation-ink:  #ffffff;
+  --type-ld-ink:          #ffffff;
+  --type-document-ink:    #ffffff;
+  --rel-contradicts-ink:  #ffffff;
 }
 
 * {

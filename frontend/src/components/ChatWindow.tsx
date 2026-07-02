@@ -148,7 +148,7 @@ export default function ChatWindow({ workspaceId, disabled }: Props) {
                   <Send size={14} />
                 </button>
               </div>
-              <p className="text-xs text-border mt-1.5 text-center">Enter to send · Shift+Enter for newline</p>
+              <p className="text-xs text-muted/70 mt-1.5 text-center">Enter to send · Shift+Enter for newline</p>
             </div>
           </motion.div>
         )}

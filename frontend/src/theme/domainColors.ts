@@ -28,8 +28,26 @@ export function typeColor(type: string | undefined): string {
 }
 
 /** A tinted background derived from a type's color, blended onto the card surface. */
-export function typeTint(type: string | undefined, amount = 45): string {
+export function typeTint(type: string | undefined, amount = 22): string {
   return `color-mix(in srgb, ${typeColor(type)} ${amount}%, var(--card))`
+}
+
+const TYPE_INK: Record<string, string> = {
+  Requirement: 'var(--type-requirement-ink)',
+  Clause: 'var(--type-clause-ink)',
+  Risk: 'var(--type-risk-ink)',
+  Mitigation: 'var(--type-mitigation-ink)',
+  LD: 'var(--type-ld-ink)',
+  Document: 'var(--type-document-ink)',
+}
+
+/**
+ * High-contrast text color to pair with `typeColor(type)` used as a SOLID
+ * badge background. Never draw typeColor-on-typeColor-tint text — same hue
+ * at any opacity still fails contrast (measured 1.7–2.3:1 in dark mode).
+ */
+export function typeInk(type: string | undefined): string {
+  return TYPE_INK[type ?? ''] ?? TYPE_INK.Document
 }
 
 export const REL_COLOR: Record<string, string> = {
@@ -44,6 +62,21 @@ export const REL_COLOR: Record<string, string> = {
 
 export function relColor(rtype: string | undefined): string {
   return REL_COLOR[rtype ?? ''] ?? REL_COLOR.CONTAINS
+}
+
+const REL_INK: Record<string, string> = {
+  COVERS: 'var(--rel-covers-ink)',
+  PARTIALLY_COVERS: 'var(--rel-partial-covers-ink)',
+  INTRODUCES_RISK: 'var(--rel-introduces-risk-ink)',
+  MITIGATED_BY: 'var(--rel-mitigated-by-ink)',
+  LINKED_TO_LD: 'var(--rel-linked-to-ld-ink)',
+  CONTRADICTS: 'var(--rel-contradicts-ink)',
+  CONTAINS: 'var(--rel-contains-ink)',
+}
+
+/** High-contrast text color to pair with `relColor(rtype)` used as a solid badge background. */
+export function relInk(rtype: string | undefined): string {
+  return REL_INK[rtype ?? ''] ?? REL_INK.CONTAINS
 }
 
 /** Coverage-status colors (Traceability view) — these map 1:1 onto the status palette. */

@@ -76,6 +76,9 @@ desktop.ini
 *.swo
 *.orig
 
+# ── Claude Code (personal overrides) ─────────────────────────────────────────
+.claude/settings.local.json
+
 # ── Streamlit (legacy) ────────────────────────────────────────────────────────
 .streamlit/secrets.toml
 

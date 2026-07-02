@@ -13,11 +13,11 @@ import { RefreshCw, Search, Eye, EyeOff, Zap, Grid, GitBranch, X, ChevronDown, C
 
 import { fetchGraphData, fetchSubgraph, fetchCrossDocRelationships } from '../api/client'
 import type { GraphNode, GraphEdge, CrossDocRelationship } from '../types'
-import { TYPE_COLOR, TYPE_LABEL, typeTint, relColor, REL_COLOR } from '../theme/domainColors'
+import { TYPE_COLOR, TYPE_LABEL, typeTint, typeInk, relColor, relInk, REL_COLOR } from '../theme/domainColors'
 
 // ── Type config ───────────────────────────────────────────────────────────────
-const TYPE_CONFIG: Record<string, { color: string; bg: string; label: string }> = Object.fromEntries(
-  Object.keys(TYPE_COLOR).map(type => [type, { color: TYPE_COLOR[type], bg: typeTint(type), label: TYPE_LABEL[type] }]),
+const TYPE_CONFIG: Record<string, { color: string; bg: string; ink: string; label: string }> = Object.fromEntries(
+  Object.keys(TYPE_COLOR).map(type => [type, { color: TYPE_COLOR[type], bg: typeTint(type), ink: typeInk(type), label: TYPE_LABEL[type] }]),
 )
 
 const NODE_W = 180
@@ -33,7 +33,7 @@ function ElementNode({ data }: NodeProps) {
         style={{ background: cfg.color, width: 7, height: 7, border: 'none' }} />
       <div style={{
         background: cfg.bg,
-        border: `1.5px solid color-mix(in srgb, ${cfg.color} 70%, transparent)`,
+        border: `1.5px solid color-mix(in srgb, ${cfg.color} 50%, transparent)`,
         borderLeft: `3px solid ${cfg.color}`,
         borderRadius: 8,
         padding: '6px 10px',
@@ -41,13 +41,13 @@ function ElementNode({ data }: NodeProps) {
         minHeight: NODE_H,
         cursor: 'grab',
         userSelect: 'none',
-        boxShadow: `0 0 14px color-mix(in srgb, ${cfg.color} 28%, transparent)`,
+        boxShadow: `0 0 10px color-mix(in srgb, ${cfg.color} 16%, transparent)`,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
           <span style={{
             fontSize: 9, fontWeight: 700, letterSpacing: 0.8,
-            color: cfg.color, fontFamily: 'monospace',
-            background: `color-mix(in srgb, ${cfg.color} 34%, transparent)`, padding: '1px 5px', borderRadius: 3,
+            color: cfg.ink, fontFamily: 'monospace',
+            background: cfg.color, padding: '1px 5px', borderRadius: 3,
             flexShrink: 0,
           }}>
             {cfg.label}
@@ -255,7 +255,7 @@ function CrossDocSidebar({
                 style={relFilter === r && r !== 'All' ? {
                   color: relColor(r),
                   borderColor: `color-mix(in srgb, ${relColor(r)} 60%, transparent)`,
-                  background: `color-mix(in srgb, ${relColor(r)} 26%, transparent)`,
+                  background: `color-mix(in srgb, ${relColor(r)} 10%, transparent)`,
                 } : {}}
                 className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-medium border transition-all ${
                   relFilter === r && r === 'All'
@@ -689,7 +689,7 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
             </div>
             <p className="text-muted text-xs leading-relaxed mb-3">{selectedNode.text as string}</p>
             <div className="flex items-center gap-2 flex-wrap">
-              <p className="text-xs text-border font-mono">{selectedNode.source as string}</p>
+              <p className="text-xs text-muted font-mono">{selectedNode.source as string}</p>
               {(selectedNode.page_number as number | undefined) != null && (
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-border/20 text-muted">
                   p.{selectedNode.page_number as number}

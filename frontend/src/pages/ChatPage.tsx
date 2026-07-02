@@ -358,7 +358,7 @@ export default function ChatPage() {
               <div className="flex flex-col items-center justify-center h-32 text-center px-4">
                 <MessageSquare size={20} className="text-muted mb-2" />
                 <p className="text-xs text-muted">No conversations yet</p>
-                <p className="text-[10px] text-border mt-1">Click "New conversation" to start</p>
+                <p className="text-[10px] text-muted/70 mt-1">Click "New conversation" to start</p>
               </div>
             ) : (
               grouped.map(group => (
@@ -488,7 +488,7 @@ export default function ChatPage() {
                     {sending ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
                   </button>
                 </div>
-                <p className="text-[10px] text-border mt-2 text-center">Enter to send · Shift+Enter for newline</p>
+                <p className="text-[10px] text-muted/70 mt-2 text-center">Enter to send · Shift+Enter for newline</p>
               </div>
             </>
           )}
