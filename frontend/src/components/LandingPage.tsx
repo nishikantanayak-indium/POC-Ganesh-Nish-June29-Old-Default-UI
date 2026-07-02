@@ -55,12 +55,13 @@ export default function LandingPage() {
 
       {/* Background grid */}
       <div className="absolute inset-0 opacity-[0.03]" style={{
-        backgroundImage: `linear-gradient(to right, #6366f1 1px, transparent 1px), linear-gradient(to bottom, #6366f1 1px, transparent 1px)`,
+        backgroundImage: `linear-gradient(to right, var(--primary) 1px, transparent 1px), linear-gradient(to bottom, var(--primary) 1px, transparent 1px)`,
         backgroundSize: '48px 48px',
       }} />
       {/* Glow blobs */}
-      <div className="absolute top-1/4 left-1/3 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-1/4 right-1/3 w-80 h-80 bg-purple-600/8 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute top-1/4 left-1/3 w-96 h-96 bg-primary/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-1/4 right-1/3 w-80 h-80 rounded-full blur-3xl pointer-events-none"
+        style={{ background: 'color-mix(in srgb, var(--chart-4) 8%, transparent)' }} />
 
       <motion.div
         initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: 'easeOut' }}
@@ -84,7 +85,7 @@ export default function LandingPage() {
           Contract Intelligence Platform
         </motion.p>
         <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }}
-          className="text-slate-400 text-sm max-w-xl mb-10 leading-relaxed">
+          className="text-muted text-sm max-w-xl mb-10 leading-relaxed">
           Two capabilities, one platform — <span className="text-foreground">analyze</span> real procurement
           documents as a knowledge graph, and <span className="text-foreground">generate</span> validated,
           SME-reviewed synthetic datasets that publish straight back into it.
@@ -99,7 +100,7 @@ export default function LandingPage() {
             <button
               key={area.key}
               onClick={() => navigate(area.route)}
-              className="group flex flex-col text-left gap-3 p-6 rounded-2xl bg-surface border border-border hover:border-primary/50 hover:shadow-[0_4px_32px_rgba(99,102,241,0.12)] transition-all active:scale-[0.99]"
+              className="group flex flex-col text-left gap-3 p-6 rounded-2xl bg-surface border border-border hover:border-primary/50 hover:shadow-[0_4px_32px_color-mix(in_srgb,var(--primary)_12%,transparent)] transition-all active:scale-[0.99]"
             >
               <div className="flex items-center gap-2.5">
                 <div className="w-10 h-10 rounded-xl bg-primary/15 border border-primary/25 flex items-center justify-center">
@@ -111,7 +112,7 @@ export default function LandingPage() {
               <p className="text-xs text-muted leading-relaxed">{area.blurb}</p>
               <ul className="space-y-1.5 mt-1">
                 {area.bullets.map((b, i) => (
-                  <li key={i} className="flex items-center gap-2 text-xs text-slate-400">
+                  <li key={i} className="flex items-center gap-2 text-xs text-muted">
                     <span className="text-primary shrink-0">{b.icon}</span>{b.text}
                   </li>
                 ))}
@@ -139,7 +140,7 @@ export default function LandingPage() {
         </motion.div>
 
         <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6 }}
-          className="text-xs text-slate-700 font-mono">
+          className="text-xs text-muted/60 font-mono">
           Neo4j · Qdrant · MinIO · GPT-4o · BGE-M3 · FastAPI · React
         </motion.p>
       </motion.div>

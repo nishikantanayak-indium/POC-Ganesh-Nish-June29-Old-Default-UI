@@ -13,27 +13,12 @@ import { RefreshCw, Search, Eye, EyeOff, Zap, Grid, GitBranch, X, ChevronDown, C
 
 import { fetchGraphData, fetchSubgraph, fetchCrossDocRelationships } from '../api/client'
 import type { GraphNode, GraphEdge, CrossDocRelationship } from '../types'
-import { useTheme } from '../theme/ThemeContext'
+import { TYPE_COLOR, TYPE_LABEL, typeTint, relColor, REL_COLOR } from '../theme/domainColors'
 
 // ── Type config ───────────────────────────────────────────────────────────────
-const TYPE_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
-  Requirement: { color: '#6366f1', bg: '#1e1b4b', label: 'REQ' },
-  Clause:      { color: '#10b981', bg: '#064e3b', label: 'CLS' },
-  Risk:        { color: '#ef4444', bg: '#450a0a', label: 'RSK' },
-  Mitigation:  { color: '#f59e0b', bg: '#451a03', label: 'MIT' },
-  LD:          { color: '#8b5cf6', bg: '#2e1065', label: 'LD'  },
-  Document:    { color: '#64748b', bg: '#0f172a', label: 'DOC' },
-}
-
-const EDGE_COLORS: Record<string, string> = {
-  COVERS:           '#10b981',
-  PARTIALLY_COVERS: '#f59e0b',
-  INTRODUCES_RISK:  '#ef4444',
-  MITIGATED_BY:     '#8b5cf6',
-  LINKED_TO_LD:     '#6366f1',
-  CONTRADICTS:      '#f43f5e',
-  CONTAINS:         '#475569',
-}
+const TYPE_CONFIG: Record<string, { color: string; bg: string; label: string }> = Object.fromEntries(
+  Object.keys(TYPE_COLOR).map(type => [type, { color: TYPE_COLOR[type], bg: typeTint(type), label: TYPE_LABEL[type] }]),
+)
 
 const NODE_W = 180
 const NODE_H = 72
@@ -48,7 +33,7 @@ function ElementNode({ data }: NodeProps) {
         style={{ background: cfg.color, width: 7, height: 7, border: 'none' }} />
       <div style={{
         background: cfg.bg,
-        border: `1.5px solid ${cfg.color}55`,
+        border: `1.5px solid color-mix(in srgb, ${cfg.color} 70%, transparent)`,
         borderLeft: `3px solid ${cfg.color}`,
         borderRadius: 8,
         padding: '6px 10px',
@@ -56,26 +41,26 @@ function ElementNode({ data }: NodeProps) {
         minHeight: NODE_H,
         cursor: 'grab',
         userSelect: 'none',
-        boxShadow: `0 0 0 1px ${cfg.color}11`,
+        boxShadow: `0 0 14px color-mix(in srgb, ${cfg.color} 28%, transparent)`,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
           <span style={{
             fontSize: 9, fontWeight: 700, letterSpacing: 0.8,
             color: cfg.color, fontFamily: 'monospace',
-            background: `${cfg.color}20`, padding: '1px 5px', borderRadius: 3,
+            background: `color-mix(in srgb, ${cfg.color} 34%, transparent)`, padding: '1px 5px', borderRadius: 3,
             flexShrink: 0,
           }}>
             {cfg.label}
           </span>
           <span style={{
-            fontSize: 10, fontWeight: 600, color: '#e2e8f0', fontFamily: 'monospace',
+            fontSize: 10, fontWeight: 600, color: 'var(--foreground)', fontFamily: 'monospace',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
             {d.id as string}
           </span>
         </div>
         <p style={{
-          fontSize: 10, color: '#94a3b8', lineHeight: 1.4, margin: 0,
+          fontSize: 10, color: 'var(--muted)', lineHeight: 1.4, margin: 0,
           overflow: 'hidden', display: '-webkit-box',
           WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
         }}>
@@ -83,8 +68,8 @@ function ElementNode({ data }: NodeProps) {
           {((d.text as string) ?? '').length > 70 ? '…' : ''}
         </p>
         {typeof d.source === 'string' && d.source && (
-          <p style={{ fontSize: 9, color: '#475569', marginTop: 4, fontFamily: 'monospace',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <p style={{ fontSize: 9, color: 'var(--muted)', marginTop: 4, fontFamily: 'monospace',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.7 }}>
             {d.source}
           </p>
         )}
@@ -166,15 +151,15 @@ function toRFNodes(raw: GraphNode[]): Node[] {
 
 function toRFEdges(raw: GraphEdge[]): Edge[] {
   return raw.map((e, i) => {
-    const color = EDGE_COLORS[e.rtype] ?? '#475569'
+    const color = relColor(e.rtype)
     return {
       id: `e${i}-${e.src}-${e.tgt}`,
       source: e.src,
       target: e.tgt,
       type: 'smoothstep',
       label: e.rtype.replace(/_/g, ' '),
-      labelStyle: { fill: '#cbd5e1', fontSize: 10, fontWeight: 500, fontFamily: 'monospace' },
-      labelBgStyle: { fill: '#0f172a', fillOpacity: 0.85 },
+      labelStyle: { fill: 'var(--foreground)', fontSize: 10, fontWeight: 500, fontFamily: 'monospace' },
+      labelBgStyle: { fill: 'var(--card)', fillOpacity: 0.85 },
       labelBgPadding: [4, 6] as [number, number],
       labelBgBorderRadius: 4,
       style: { stroke: color, strokeWidth: 2 },
@@ -268,9 +253,9 @@ function CrossDocSidebar({
                 key={r}
                 onClick={() => setRelFilter(r)}
                 style={relFilter === r && r !== 'All' ? {
-                  color: EDGE_COLORS[r] ?? 'var(--primary)',
-                  borderColor: `${EDGE_COLORS[r] ?? 'var(--primary)'}55`,
-                  background: `${EDGE_COLORS[r] ?? 'var(--primary)'}18`,
+                  color: relColor(r),
+                  borderColor: `color-mix(in srgb, ${relColor(r)} 60%, transparent)`,
+                  background: `color-mix(in srgb, ${relColor(r)} 26%, transparent)`,
                 } : {}}
                 className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-medium border transition-all ${
                   relFilter === r && r === 'All'
@@ -308,7 +293,7 @@ function CrossDocSidebar({
               </p>
             ) : (
               filtered.map((row, i) => {
-                const color   = EDGE_COLORS[row.rtype] ?? '#6366f1'
+                const color   = relColor(row.rtype)
                 const srcCfg  = TYPE_CONFIG[row.src_type] ?? TYPE_CONFIG.Document
                 const tgtCfg  = TYPE_CONFIG[row.tgt_type] ?? TYPE_CONFIG.Document
                 const isOpen  = expandedIdx === i
@@ -403,18 +388,16 @@ function CrossDocSidebar({
 // ── Clickable minimap (must be inside ReactFlow context to use useReactFlow) ──
 function ClickableMiniMap() {
   const { setCenter } = useReactFlow()
-  const { theme } = useTheme()
-  const dark = theme === 'dark'
   return (
     <MiniMap
       pannable
       zoomable
       onClick={(_, pos) => setCenter(pos.x, pos.y, { zoom: 1.4, duration: 500 })}
-      nodeColor={n => TYPE_CONFIG[(n.data as Record<string, unknown>).type as string]?.color ?? '#334155'}
-      maskColor={dark ? 'rgba(9,9,15,0.82)' : 'rgba(200,204,220,0.72)'}
+      nodeColor={n => TYPE_CONFIG[(n.data as Record<string, unknown>).type as string]?.color ?? 'var(--muted)'}
+      maskColor="color-mix(in srgb, var(--bg) 82%, transparent)"
       style={{
-        background: dark ? '#111118' : '#ffffff',
-        border: `1px solid ${dark ? '#252535' : '#d8ddf0'}`,
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
         cursor: 'pointer',
       }}
     />
@@ -539,13 +522,13 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
             const cfg = TYPE_CONFIG[type] ?? TYPE_CONFIG.Document
             return (
               <span key={type}
-                style={{ borderColor: `${cfg.color}55`, color: cfg.color }}
+                style={{ borderColor: `color-mix(in srgb, ${cfg.color} 55%, transparent)`, color: cfg.color }}
                 className="text-[10px] font-mono px-1.5 py-0.5 rounded-full border whitespace-nowrap">
                 {type.replace('Requirement', 'Req').replace('Mitigation', 'Mit')}: {count}
               </span>
             )
           })}
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full border border-slate-600 text-slate-500 whitespace-nowrap">
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full border border-border text-muted whitespace-nowrap">
             edges: {edges.length}
           </span>
         </div>
@@ -677,7 +660,7 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
           proOptions={{ hideAttribution: true }}
           defaultEdgeOptions={{ type: 'smoothstep' }}
         >
-          <Background variant={BackgroundVariant.Dots} gap={28} size={1} color="#1a1a2e" />
+          <Background variant={BackgroundVariant.Dots} gap={28} size={1} color="var(--border)" />
           <Controls showInteractive={false} />
           <ClickableMiniMap />
         </ReactFlow>
@@ -691,7 +674,7 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
           >
             <div className="flex items-start justify-between mb-3">
               <div>
-                <span style={{ color: TYPE_CONFIG[selectedNode.type as string]?.color ?? '#64748b' }}
+                <span style={{ color: TYPE_CONFIG[selectedNode.type as string]?.color ?? 'var(--muted)' }}
                   className="text-xs font-mono font-bold uppercase tracking-widest">
                   {selectedNode.type as string}
                 </span>
@@ -708,12 +691,12 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
             <div className="flex items-center gap-2 flex-wrap">
               <p className="text-xs text-border font-mono">{selectedNode.source as string}</p>
               {(selectedNode.page_number as number | undefined) != null && (
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-border/20 text-slate-500">
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-border/20 text-muted">
                   p.{selectedNode.page_number as number}
                 </span>
               )}
             </div>
-            <p className="text-xs text-slate-600 font-mono mt-1">{selectedNode.document_id as string}</p>
+            <p className="text-xs text-muted font-mono mt-1">{selectedNode.document_id as string}</p>
           </motion.div>
         )}
       </div>
@@ -741,13 +724,13 @@ export default function KnowledgeGraph({ workspaceId, refreshKey }: { workspaceI
 
       {/* Edge legend */}
       <div className="flex items-center gap-5 px-4 py-2 border-t border-border bg-surface shrink-0 overflow-x-auto">
-        {Object.entries(EDGE_COLORS).filter(([k]) => k !== 'CONTAINS').map(([rel, color]) => (
+        {Object.entries(REL_COLOR).filter(([k]) => k !== 'CONTAINS').map(([rel, color]) => (
           <div key={rel} className="flex items-center gap-1.5 shrink-0">
             <div style={{ background: color }} className="w-5 h-0.5 rounded-full" />
             <span className="text-xs text-muted font-mono">{rel.replace(/_/g, ' ')}</span>
           </div>
         ))}
-        <div className="ml-auto text-xs text-slate-600 font-mono shrink-0">
+        <div className="ml-auto text-xs text-muted font-mono shrink-0">
           drag freely · scroll to zoom · dbl-click to expand
         </div>
       </div>

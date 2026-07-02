@@ -99,7 +99,7 @@ function StepStrip({ steps }: { steps: PipelineStep[] }) {
                 'flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-mono select-none transition-all',
                 status === 'idle'          && 'bg-card border border-border text-border',
                 status === 'running'       && 'bg-primary/15 border border-primary/40 text-primary',
-                status === 'coordinating'  && 'bg-amber-500/10 border border-amber-500/40 text-amber-400',
+                status === 'coordinating'  && 'bg-warning/10 border border-warning/40 text-warning',
                 status === 'complete'      && 'bg-success/10 border border-success/30 text-success',
                 status === 'error'         && 'bg-danger/10 border border-danger/30 text-danger',
                 status === 'skipped'       && 'bg-card border border-border text-muted',
@@ -131,18 +131,18 @@ function LogViewer({ logs, running }: { logs: LogLine[]; running: boolean }) {
   }, [logs.length, running])
 
   return (
-    <div className="mt-2.5 rounded-lg bg-[#0d1117] border border-white/[0.06] overflow-hidden">
+    <div className="mt-2.5 rounded-lg bg-bg border border-border overflow-hidden">
       <div className="max-h-56 overflow-y-auto p-3 font-mono text-xs space-y-0.5">
         {logs.length === 0
-          ? <span className="text-slate-600">Waiting for first event…</span>
+          ? <span className="text-muted/60">Waiting for first event…</span>
           : logs.map((line, i) => (
             <div key={i} className="flex gap-2.5 leading-[1.6]">
-              <span className="shrink-0 text-slate-600 select-none">{fmtTime(line.ts)}</span>
+              <span className="shrink-0 text-muted/60 select-none">{fmtTime(line.ts)}</span>
               <span className={clsx(
-                line.level === 'success' && 'text-emerald-400',
-                line.level === 'error'   && 'text-red-400',
-                line.level === 'warn'    && 'text-amber-400',
-                line.level === 'info'    && 'text-slate-300',
+                line.level === 'success' && 'text-success',
+                line.level === 'error'   && 'text-danger',
+                line.level === 'warn'    && 'text-warning',
+                line.level === 'info'    && 'text-foreground/80',
               )}>
                 {line.msg}
               </span>
@@ -151,8 +151,8 @@ function LogViewer({ logs, running }: { logs: LogLine[]; running: boolean }) {
         }
         {running && (
           <div className="flex gap-2.5 leading-[1.6]">
-            <span className="shrink-0 text-slate-600 select-none">{fmtTime(Date.now())}</span>
-            <span className="text-slate-500 animate-pulse">█</span>
+            <span className="shrink-0 text-muted/60 select-none">{fmtTime(Date.now())}</span>
+            <span className="text-muted animate-pulse">█</span>
           </div>
         )}
         <div ref={bottomRef} />
@@ -219,7 +219,7 @@ function JobCard({ job }: { job: PipelineJob }) {
           {/* File chips */}
           <div className="flex flex-wrap gap-1">
             {job.files.map(f => (
-              <span key={f} className="text-xs font-mono text-slate-400 bg-surface border border-border/50 px-2 py-0.5 rounded">
+              <span key={f} className="text-xs font-mono text-muted bg-surface border border-border/50 px-2 py-0.5 rounded">
                 {f}
               </span>
             ))}
@@ -232,18 +232,18 @@ function JobCard({ job }: { job: PipelineJob }) {
           {job.summary && (
             <div className="flex items-center gap-3 text-xs font-mono">
               <span className="text-success">✓ {job.summary.elements} elements</span>
-              <span className="text-slate-600">·</span>
+              <span className="text-muted/60">·</span>
               <span className="text-success">✓ {job.summary.edges} edges</span>
               {job.summary.coverage_items > 0 && (
                 <>
-                  <span className="text-slate-600">·</span>
+                  <span className="text-muted/60">·</span>
                   <span className="text-success">✓ {job.summary.coverage_items} coverage items</span>
                 </>
               )}
               {job.summary.skipped > 0 && (
                 <>
-                  <span className="text-slate-600">·</span>
-                  <span className="text-amber-500">{job.summary.skipped} skipped (already ingested)</span>
+                  <span className="text-muted/60">·</span>
+                  <span className="text-warning">{job.summary.skipped} skipped (already ingested)</span>
                 </>
               )}
             </div>
@@ -556,7 +556,7 @@ export default function WorkflowPanel({
                             'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all',
                             status === 'idle'         && 'bg-card border-border text-muted',
                             status === 'running'      && 'bg-primary/20 border-primary text-primary animate-pulse',
-                            status === 'coordinating' && 'bg-amber-500/10 border-amber-500/50 text-amber-400',
+                            status === 'coordinating' && 'bg-warning/10 border-warning/50 text-warning',
                             status === 'complete'     && 'bg-success/15 border-success text-success',
                             status === 'error'        && 'bg-danger/15 border-danger text-danger',
                             status === 'skipped'      && 'bg-card border-border text-muted',
@@ -585,7 +585,7 @@ export default function WorkflowPanel({
                           {step?.message && status !== 'idle' && (
                             <p className={clsx('text-xs mt-0.5 font-mono',
                               status === 'error' ? 'text-danger' :
-                              status === 'coordinating' ? 'text-amber-400' : 'text-muted')}>
+                              status === 'coordinating' ? 'text-warning' : 'text-muted')}>
                               {step.message}
                             </p>
                           )}

@@ -81,7 +81,7 @@ export default function ValidateTab({ meta, version }: Props) {
         </div>
 
         {showSchema && (
-          <pre className="rounded-lg bg-[#0d1117] border border-white/[0.06] p-3 text-[11px] text-slate-300 overflow-x-auto max-h-64">
+          <pre className="rounded-lg bg-bg border border-border p-3 text-[11px] text-foreground/80 overflow-x-auto max-h-64">
             {JSON.stringify(meta?.record_schema ?? {}, null, 2)}
           </pre>
         )}
@@ -117,7 +117,7 @@ export default function ValidateTab({ meta, version }: Props) {
                         {r.risk_category && <span>· risk_cat: <span className="text-foreground">{r.risk_category}</span></span>}
                       </div>
                       {Object.keys(r.attributes || {}).length > 0 && (
-                        <pre className="text-[11px] text-slate-400 bg-card rounded p-2 overflow-x-auto">{JSON.stringify(r.attributes, null, 2)}</pre>
+                        <pre className="text-[11px] text-muted bg-card rounded p-2 overflow-x-auto">{JSON.stringify(r.attributes, null, 2)}</pre>
                       )}
                       {rep && rep.reasons.length > 0 && (
                         <div className="rounded-lg border border-danger/30 bg-danger/[0.05] p-2 space-y-0.5">

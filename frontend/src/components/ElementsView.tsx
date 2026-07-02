@@ -225,7 +225,7 @@ function PageNavBtn({
         <span className="text-[10px] opacity-60">{count}</span>
       )}
       {dot && !active && (
-        <span className="w-1.5 h-1.5 bg-amber-400 rounded-full shrink-0" />
+        <span className="w-1.5 h-1.5 bg-warning rounded-full shrink-0" />
       )}
     </button>
   )

@@ -475,14 +475,14 @@ export default function GenerateTab({
           </div>
 
           {events.length > 0 && (
-            <div className="mt-3 rounded-lg bg-[#0d1117] border border-white/[0.06] max-h-44 overflow-y-auto p-3 font-mono text-xs space-y-0.5">
+            <div className="mt-3 rounded-lg bg-bg border border-border max-h-44 overflow-y-auto p-3 font-mono text-xs space-y-0.5">
               {events.filter(e => e.message).map((e, i) => (
                 <div key={i} className="flex gap-2.5 leading-relaxed">
-                  <span className={clsx('shrink-0', e.stage === 'error' ? 'text-red-400' : (e.stage === 'complete' || e.stage === 'done') ? 'text-emerald-400' : 'text-slate-500')}>[{e.stage}]</span>
-                  <span className="text-slate-300">{e.message}</span>
+                  <span className={clsx('shrink-0', e.stage === 'error' ? 'text-danger' : (e.stage === 'complete' || e.stage === 'done') ? 'text-success' : 'text-muted')}>[{e.stage}]</span>
+                  <span className="text-foreground/80">{e.message}</span>
                 </div>
               ))}
-              {running && <div className="text-slate-500 animate-pulse">█</div>}
+              {running && <div className="text-muted animate-pulse">█</div>}
             </div>
           )}
         </section>

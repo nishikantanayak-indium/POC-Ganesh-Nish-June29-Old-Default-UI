@@ -6,16 +6,7 @@ import clsx from 'clsx'
 import { askQuestion } from '../api/client'
 import { SourcesSection } from './EvidenceCards'
 import type { ChatMessage } from '../types'
-
-const QUERY_TYPE: Record<string, { label: string; color: string; bg: string }> = {
-  coverage_gap:     { label: 'Coverage Gap',    color: '#ef4444', bg: '#ef444415' },
-  risk_for_partial: { label: 'Risk / Partial',  color: '#f59e0b', bg: '#f59e0b15' },
-  no_mitigation:    { label: 'No Mitigation',   color: '#8b5cf6', bg: '#8b5cf615' },
-  no_ld:            { label: 'No LD',           color: '#6366f1', bg: '#6366f115' },
-  summary:          { label: 'Summary',         color: '#10b981', bg: '#10b98115' },
-  comparison:       { label: 'Comparison',      color: '#06b6d4', bg: '#06b6d415' },
-  general:          { label: 'Semantic Search', color: '#10b981', bg: '#10b98115' },
-}
+import { QUERY_TYPE, queryTypeTint } from '../theme/domainColors'
 
 const SUGGESTIONS = [
   'Give me an overall summary',
@@ -124,7 +115,7 @@ export default function ChatWindow({ workspaceId, disabled }: Props) {
                     <div className="max-w-[95%] bg-card border border-border rounded-2xl rounded-bl-sm px-3.5 py-3">
                       {msg.queryType && QUERY_TYPE[msg.queryType] && (
                         <div className="inline-flex items-center gap-1.5 text-xs font-mono font-semibold px-2 py-0.5 rounded mb-2"
-                          style={{ color: QUERY_TYPE[msg.queryType].color, background: QUERY_TYPE[msg.queryType].bg }}>
+                          style={{ color: QUERY_TYPE[msg.queryType].color, background: queryTypeTint(msg.queryType) }}>
                           {QUERY_TYPE[msg.queryType].label}
                         </div>
                       )}

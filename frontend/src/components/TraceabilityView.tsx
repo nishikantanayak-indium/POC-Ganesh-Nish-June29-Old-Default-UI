@@ -5,23 +5,24 @@ import clsx from 'clsx'
 
 import { fetchChain } from '../api/client'
 import type { CoverageResult, CoverageStatus, TraceabilityChain, ChainElement } from '../types'
+import { statusColor, typeColor } from '../theme/domainColors'
 
 // ── Status config ────────────────────────────────────────────────────────────
-const STATUS_CONFIG: Record<CoverageStatus, { icon: string; color: string; bg: string; label: string }> = {
-  'Covered':          { icon: '✓', color: '#10b981', bg: '#064e3b', label: 'Covered' },
-  'Partially Covered':{ icon: '~', color: '#f59e0b', bg: '#451a03', label: 'Partial' },
-  'Not Covered':      { icon: '✗', color: '#ef4444', bg: '#450a0a', label: 'Not Covered' },
+const STATUS_ICON: Record<CoverageStatus, string> = {
+  'Covered': '✓', 'Partially Covered': '~', 'Not Covered': '✗',
+}
+const STATUS_LABEL: Record<CoverageStatus, string> = {
+  'Covered': 'Covered', 'Partially Covered': 'Partial', 'Not Covered': 'Not Covered',
+}
+const STATUS_CONFIG: Record<CoverageStatus, { icon: string; color: string; label: string }> = {
+  'Covered':           { icon: STATUS_ICON.Covered, color: statusColor('Covered'), label: STATUS_LABEL.Covered },
+  'Partially Covered': { icon: STATUS_ICON['Partially Covered'], color: statusColor('Partially Covered'), label: STATUS_LABEL['Partially Covered'] },
+  'Not Covered':       { icon: STATUS_ICON['Not Covered'], color: statusColor('Not Covered'), label: STATUS_LABEL['Not Covered'] },
 }
 
 // ── Element type accent colors ────────────────────────────────────────────────
-const TYPE_ACCENT: Record<string, string> = {
-  Clause:     '#10b981',
-  Risk:       '#ef4444',
-  Mitigation: '#f59e0b',
-  LD:         '#8b5cf6',
-}
 function accentFor(type: string): string {
-  return TYPE_ACCENT[type] ?? '#6366f1'
+  return typeColor(type)
 }
 
 // ── ChainElement card ─────────────────────────────────────────────────────────
@@ -42,22 +43,26 @@ function ElementCard({ elem }: { elem: ChainElement }) {
       {/* Row 1: type pill + id */}
       <div className="flex items-center gap-2 flex-wrap mb-1.5">
         <span
-          style={{ color: accent, borderColor: `${accent}44`, background: `${accent}18` }}
+          style={{
+            color: accent,
+            borderColor: `color-mix(in srgb, ${accent} 27%, transparent)`,
+            background: `color-mix(in srgb, ${accent} 9%, transparent)`,
+          }}
           className="text-[9px] font-bold tracking-widest uppercase px-1.5 py-0.5 rounded border"
         >
           {elem.type}
         </span>
         <span className="font-mono text-[11px] text-foreground font-semibold">{elem.id}</span>
         <span className="ml-auto flex items-center gap-1.5">
-          <span className="text-[9px] font-mono text-slate-400 bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded">
+          <span className="text-[9px] font-mono text-muted bg-card border border-border px-1.5 py-0.5 rounded">
             {elem.relationship.replace(/_/g, ' ')}
           </span>
           {elem.is_inter_document ? (
-            <span className="text-[9px] font-bold text-blue-300 bg-blue-900/40 border border-blue-700/50 px-1.5 py-0.5 rounded tracking-wide">
+            <span className="text-[9px] font-bold text-primary bg-primary/15 border border-primary/30 px-1.5 py-0.5 rounded tracking-wide">
               ↔ INTER
             </span>
           ) : (
-            <span className="text-[9px] font-bold text-slate-400 bg-slate-800/60 border border-slate-700/50 px-1.5 py-0.5 rounded tracking-wide">
+            <span className="text-[9px] font-bold text-muted bg-card border border-border px-1.5 py-0.5 rounded tracking-wide">
               ↕ INTRA
             </span>
           )}
@@ -65,7 +70,7 @@ function ElementCard({ elem }: { elem: ChainElement }) {
       </div>
 
       {/* Row 2: full / preview text */}
-      <p className="text-[11px] text-slate-300 leading-relaxed whitespace-pre-wrap break-words">
+      <p className="text-[11px] text-foreground/80 leading-relaxed whitespace-pre-wrap break-words">
         {expanded || !hasMore ? elem.text : elem.text.slice(0, PREVIEW) + '…'}
       </p>
       {hasMore && (
@@ -78,7 +83,7 @@ function ElementCard({ elem }: { elem: ChainElement }) {
       )}
 
       {/* Row 3: source */}
-      <p className="text-[9px] text-slate-500 font-mono mt-1.5 break-all">{elem.source}</p>
+      <p className="text-[9px] text-muted font-mono mt-1.5 break-all opacity-80">{elem.source}</p>
     </motion.div>
   )
 }
@@ -97,14 +102,21 @@ function Column({
     <div className="flex flex-col min-w-0 flex-1">
       {/* Sticky header */}
       <div
-        style={{ borderBottom: `2px solid ${color}55`, background: `${color}12` }}
+        style={{
+          borderBottom: `2px solid color-mix(in srgb, ${color} 33%, transparent)`,
+          background: `color-mix(in srgb, ${color} 7%, transparent)`,
+        }}
         className="sticky top-0 z-10 px-3 py-2 flex items-center justify-between"
       >
         <span style={{ color }} className="text-xs font-semibold tracking-wide uppercase">
           {title}
         </span>
         <span
-          style={{ color, borderColor: `${color}44`, background: `${color}22` }}
+          style={{
+            color,
+            borderColor: `color-mix(in srgb, ${color} 27%, transparent)`,
+            background: `color-mix(in srgb, ${color} 13%, transparent)`,
+          }}
           className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-full border"
         >
           {items.length}
@@ -114,7 +126,7 @@ function Column({
       {/* Cards */}
       <div className="flex-1 overflow-y-auto p-3">
         {items.length === 0 ? (
-          <p className="text-slate-600 text-sm text-center mt-6">—</p>
+          <p className="text-muted text-sm text-center mt-6">—</p>
         ) : (
           items.map(e => <ElementCard key={e.id + e.relationship} elem={e} />)
         )}
@@ -137,13 +149,13 @@ function InterIntraSummary({ chain }: { chain: TraceabilityChain }) {
 
   return (
     <div className="shrink-0 flex gap-3 px-4 py-3 border-t border-border bg-surface">
-      <div className="flex items-center gap-2 bg-blue-900/30 border border-blue-700/40 rounded-lg px-4 py-2">
-        <span className="text-sm font-bold text-blue-300 font-mono">{interCount}</span>
-        <span className="text-xs text-blue-400">↔ Inter-document</span>
+      <div className="flex items-center gap-2 bg-primary/10 border border-primary/30 rounded-lg px-4 py-2">
+        <span className="text-sm font-bold text-primary font-mono">{interCount}</span>
+        <span className="text-xs text-primary/80">↔ Inter-document</span>
       </div>
-      <div className="flex items-center gap-2 bg-slate-800/50 border border-slate-700/40 rounded-lg px-4 py-2">
-        <span className="text-sm font-bold text-slate-300 font-mono">{intraCount}</span>
-        <span className="text-xs text-slate-400">↕ Intra-document</span>
+      <div className="flex items-center gap-2 bg-card border border-border rounded-lg px-4 py-2">
+        <span className="text-sm font-bold text-foreground font-mono">{intraCount}</span>
+        <span className="text-xs text-muted">↕ Intra-document</span>
       </div>
     </div>
   )
@@ -189,9 +201,9 @@ export default function TraceabilityView({ workspaceId, coverage }: { workspaceI
         {/* Summary */}
         <div className="p-4 border-b border-border bg-surface shrink-0">
           <div className="grid grid-cols-3 gap-2 mb-3">
-            <MetricCard value={covered}    label="Covered"  color="#10b981" />
-            <MetricCard value={partial}    label="Partial"  color="#f59e0b" />
-            <MetricCard value={notCovered} label="Gap"      color="#ef4444" />
+            <MetricCard value={covered}    label="Covered"  color={statusColor('Covered')} />
+            <MetricCard value={partial}    label="Partial"  color={statusColor('Partially Covered')} />
+            <MetricCard value={notCovered} label="Gap"      color={statusColor('Not Covered')} />
           </div>
           <div className="flex items-center justify-between text-xs mb-1">
             <span className="text-muted">Coverage score</span>
@@ -226,7 +238,7 @@ export default function TraceabilityView({ workspaceId, coverage }: { workspaceI
                   </div>
                   <p className="text-xs text-muted mt-0.5 leading-relaxed">{r.requirement_text}</p>
                   <div className="flex items-center gap-2 mt-1.5">
-                    <span style={{ color: cfg.color, borderColor: `${cfg.color}44` }}
+                    <span style={{ color: cfg.color, borderColor: `color-mix(in srgb, ${cfg.color} 27%, transparent)` }}
                       className="text-xs font-medium px-2 py-0.5 rounded-full border bg-transparent">
                       {cfg.label}
                     </span>
@@ -260,11 +272,11 @@ export default function TraceabilityView({ workspaceId, coverage }: { workspaceI
             <div className="shrink-0 px-4 py-3 border-b border-border bg-surface">
               <div className="flex items-center gap-2 mb-1.5">
                 <span className="font-mono text-sm font-bold text-foreground">{chain.requirement.id}</span>
-                <span className="ml-auto text-[10px] font-mono text-slate-500 bg-slate-800 border border-slate-700 px-2 py-0.5 rounded shrink-0">
+                <span className="ml-auto text-[10px] font-mono text-muted bg-card border border-border px-2 py-0.5 rounded shrink-0">
                   {chain.requirement.source}
                 </span>
               </div>
-              <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap break-words">
+              <p className="text-xs text-foreground/80 leading-relaxed whitespace-pre-wrap break-words">
                 {chain.requirement.text}
               </p>
             </div>
@@ -273,22 +285,22 @@ export default function TraceabilityView({ workspaceId, coverage }: { workspaceI
             <div className="flex-1 flex overflow-hidden divide-x divide-border">
               <Column
                 title="Clauses"
-                color="#10b981"
+                color={typeColor('Clause')}
                 items={[...chain.full_coverage, ...chain.partial_coverage]}
               />
               <Column
                 title="Risks"
-                color="#ef4444"
+                color={typeColor('Risk')}
                 items={chain.risks}
               />
               <Column
                 title="Mitigations"
-                color="#f59e0b"
+                color={typeColor('Mitigation')}
                 items={chain.mitigations}
               />
               <Column
                 title="LDs"
-                color="#8b5cf6"
+                color={typeColor('LD')}
                 items={chain.lds}
               />
             </div>

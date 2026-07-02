@@ -21,6 +21,22 @@
   --chart-2:      #199e70;
   --chart-3:      #d95926;
   --chart-4:      #9085e9;
+  /* Domain semantics — element/relationship types across the Graph, */
+  /* Traceability, Evidence and Chat views all read from these so a  */
+  /* palette change only ever touches this file.                    */
+  --type-requirement: var(--primary);
+  --type-clause:       var(--success);
+  --type-risk:         var(--danger);
+  --type-mitigation:   var(--warning);
+  --type-ld:           var(--chart-4);
+  --type-document:     var(--muted);
+  --rel-covers:           var(--success);
+  --rel-partial-covers:   var(--warning);
+  --rel-introduces-risk:  var(--danger);
+  --rel-mitigated-by:     var(--chart-4);
+  --rel-linked-to-ld:     var(--primary);
+  --rel-contradicts:      var(--chart-3);
+  --rel-contains:         var(--muted);
 }
 
 /* ── Light theme ──────────────────────────────────────────────────────── */
@@ -47,6 +63,14 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+/* Toggled on <html> by CustomCursor while it's active (fine-pointer, motion
+   allowed) — the !important beats Tailwind's cursor-* utility classes, which
+   otherwise set cursor per-element and would poke through. */
+.custom-cursor-active,
+.custom-cursor-active * {
+  cursor: none !important;
 }
 
 body {

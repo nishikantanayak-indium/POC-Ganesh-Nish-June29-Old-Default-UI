@@ -15,18 +15,7 @@ import {
   deleteConversation, fetchMessages, askInConversation,
 } from '../api/client'
 import type { Conversation, ConversationMessage, EvidenceItem } from '../types'
-
-// ── Query type labels ─────────────────────────────────────────────────────────
-
-const QUERY_TYPE: Record<string, { label: string; color: string; bg: string }> = {
-  coverage_gap:     { label: 'Coverage Gap',    color: '#ef4444', bg: '#ef444415' },
-  risk_for_partial: { label: 'Risk / Partial',  color: '#f59e0b', bg: '#f59e0b15' },
-  no_mitigation:    { label: 'No Mitigation',   color: '#8b5cf6', bg: '#8b5cf615' },
-  no_ld:            { label: 'No LD',           color: '#6366f1', bg: '#6366f115' },
-  summary:          { label: 'Summary',         color: '#10b981', bg: '#10b98115' },
-  comparison:       { label: 'Comparison',      color: '#06b6d4', bg: '#06b6d415' },
-  general:          { label: 'Semantic Search', color: '#10b981', bg: '#10b98115' },
-}
+import { QUERY_TYPE, queryTypeTint } from '../theme/domainColors'
 
 const SUGGESTIONS = [
   'Give me an overall summary of coverage and risks',
@@ -134,7 +123,7 @@ function ConvItem({
         <>
           <p className={clsx(
             'text-xs truncate pr-12 leading-snug',
-            selected ? 'text-foreground font-medium' : 'text-slate-300',
+            selected ? 'text-foreground font-medium' : 'text-muted',
           )}>
             {conv.title}
           </p>
@@ -189,7 +178,7 @@ function MessageBubble({ msg }: { msg: ConversationMessage }) {
         <div className="max-w-[80%] bg-card border border-border rounded-2xl rounded-bl-sm px-4 py-3.5">
           {qt && (
             <div className="inline-flex items-center gap-1.5 text-xs font-mono font-semibold px-2 py-0.5 rounded mb-2.5"
-              style={{ color: qt.color, background: qt.bg }}>
+              style={{ color: qt.color, background: queryTypeTint(msg.query_type) }}>
               {qt.label}
             </div>
           )}

@@ -6,10 +6,12 @@ import ChatPage from './pages/ChatPage'
 import StudioProjectsPage from './pages/StudioProjectsPage'
 import StudioProjectPage from './pages/StudioProjectPage'
 import GlobalToastContainer from './components/GlobalToastContainer'
+import CustomCursor from './components/CustomCursor'
 
 export default function App() {
   return (
     <>
+      <CustomCursor />
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/workspaces" element={<WorkspacesPage />} />

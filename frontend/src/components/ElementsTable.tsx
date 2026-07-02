@@ -1,15 +1,14 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, type CSSProperties } from 'react'
 import { Search, ChevronDown, ChevronRight } from 'lucide-react'
 import clsx from 'clsx'
 import type { GraphNode, ElementType } from '../types'
+import { typeColor } from '../theme/domainColors'
 
-const TYPE_COLORS: Record<ElementType, string> = {
-  Requirement: 'text-indigo-400 bg-indigo-400/10 border-indigo-400/30',
-  Clause:      'text-emerald-400 bg-emerald-400/10 border-emerald-400/30',
-  Risk:        'text-red-400 bg-red-400/10 border-red-400/30',
-  Mitigation:  'text-amber-400 bg-amber-400/10 border-amber-400/30',
-  LD:          'text-purple-400 bg-purple-400/10 border-purple-400/30',
-  Document:    'text-slate-400 bg-slate-400/10 border-slate-400/30',
+function typePillStyle(type: string, active: boolean): CSSProperties {
+  const c = typeColor(type)
+  return active
+    ? { color: c, background: `color-mix(in srgb, ${c} 10%, transparent)`, borderColor: c }
+    : {}
 }
 
 const ELEMENT_TYPES: ElementType[] = ['Requirement', 'Clause', 'Risk', 'Mitigation', 'LD']
@@ -91,11 +90,10 @@ export default function ElementsTable({ elements }: Props) {
             <button
               key={t}
               onClick={() => setTypeFilter(t)}
+              style={typePillStyle(t, typeFilter === t)}
               className={clsx(
                 'px-3 py-1 rounded-full text-xs font-medium transition-all border',
-                typeFilter === t
-                  ? `${TYPE_COLORS[t]} border-current`
-                  : 'text-muted border-border hover:text-foreground',
+                typeFilter !== t && 'text-muted border-border hover:text-foreground',
               )}
             >
               {t.slice(0, 3)} {typeCounts[t] ? `(${typeCounts[t]})` : ''}
@@ -140,7 +138,7 @@ export default function ElementsTable({ elements }: Props) {
                   </td>
                   <td className="font-mono text-xs text-foreground whitespace-nowrap">{e.id}</td>
                   <td>
-                    <span className={clsx('text-xs font-medium px-2 py-0.5 rounded-full border', TYPE_COLORS[e.type])}>
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full border" style={typePillStyle(e.type, true)}>
                       {e.type}
                     </span>
                   </td>

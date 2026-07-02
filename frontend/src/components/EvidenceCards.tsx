@@ -3,17 +3,13 @@ import { ChevronDown, ChevronUp, BookOpen, GitBranch, ArrowRight, ArrowLeft, Lin
 import { motion, AnimatePresence } from 'framer-motion'
 import clsx from 'clsx'
 import type { EvidenceItem, EvidenceConnection, CoverageSummary } from '../types'
+import { typeColor } from '../theme/domainColors'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-export const TYPE_COLOR: Record<string, string> = {
-  Requirement: '#6366f1',
-  Clause:      '#10b981',
-  Risk:        '#ef4444',
-  Mitigation:  '#f59e0b',
-  LD:          '#8b5cf6',
-  Document:    '#64748b',
-}
+// A distinct hue for "this spans two documents" — reuses the chart-2 slot
+// rather than introducing a one-off color, so it still moves with the palette.
+const CROSS_DOC_COLOR = 'var(--chart-2)'
 
 export const REL_LABEL: Record<string, string> = {
   COVERS:           'covers',
@@ -59,7 +55,7 @@ function StatRow({ label, value, total, color }: { label: string; value: number;
 // ── Connection row (recursive, with tree lines) ───────────────────────────────
 
 export function ConnectionRow({ conn, depth = 0 }: { conn: EvidenceConnection; depth?: number }) {
-  const accent   = conn.type ? (TYPE_COLOR[conn.type] ?? '#64748b') : '#64748b'
+  const accent   = typeColor(conn.type)
   const relLabel = REL_LABEL[conn.rel] ?? conn.rel.toLowerCase().replace(/_/g, ' ')
   const isOut    = conn.direction === 'outgoing'
   const shortText = (conn.text ?? '').length > 100
@@ -79,14 +75,17 @@ export function ConnectionRow({ conn, depth = 0 }: { conn: EvidenceConnection; d
           <div className="flex items-center gap-1.5 flex-wrap">
             <span
               className="text-[11px] font-medium px-1.5 py-0.5 rounded"
-              style={{ color: accent, background: `${accent}20` }}
+              style={{ color: accent, background: `color-mix(in srgb, ${accent} 13%, transparent)` }}
             >
               {relLabel}
             </span>
             {conn.type && (
               <span
                 className="text-[10px] font-mono px-1 py-0.5 rounded border"
-                style={{ color: `${accent}bb`, borderColor: `${accent}35` }}
+                style={{
+                  color: `color-mix(in srgb, ${accent} 73%, var(--foreground))`,
+                  borderColor: `color-mix(in srgb, ${accent} 21%, transparent)`,
+                }}
               >
                 {conn.type}
               </span>
@@ -96,7 +95,7 @@ export function ConnectionRow({ conn, depth = 0 }: { conn: EvidenceConnection; d
             )}
           </div>
           {shortText && (
-            <p className="text-[11px] text-slate-400 leading-relaxed mt-0.5">{shortText}</p>
+            <p className="text-[11px] text-muted leading-relaxed mt-0.5">{shortText}</p>
           )}
         </div>
       </div>
@@ -115,13 +114,13 @@ export function SummaryCard({ summary, index }: { summary: CoverageSummary; inde
 
   return (
     <div className="rounded-xl bg-bg border border-border overflow-hidden"
-      style={{ borderLeft: '3px solid #10b981' }}>
+      style={{ borderLeft: '3px solid var(--success)' }}>
 
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/50 bg-emerald-500/5">
-        <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-mono flex items-center justify-center shrink-0">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/50 bg-success/5">
+        <span className="w-5 h-5 rounded-full bg-success/20 text-success text-[10px] font-mono flex items-center justify-center shrink-0">
           {index + 1}
         </span>
-        <span className="text-xs font-semibold text-emerald-400 tracking-wide">Coverage Summary</span>
+        <span className="text-xs font-semibold text-success tracking-wide">Coverage Summary</span>
       </div>
 
       <div className="px-4 py-3 space-y-4">
@@ -132,9 +131,9 @@ export function SummaryCard({ summary, index }: { summary: CoverageSummary; inde
               <span className="text-[11px] font-mono text-muted bg-border/30 px-2 py-0.5 rounded">{r.total} total</span>
             </div>
             <div className="space-y-2.5">
-              <StatRow label="Covered"     value={r.covered}           total={r.total} color="#10b981" />
-              <StatRow label="Partial"     value={r.partially_covered} total={r.total} color="#f59e0b" />
-              <StatRow label="Not Covered" value={r.not_covered}       total={r.total} color="#ef4444" />
+              <StatRow label="Covered"     value={r.covered}           total={r.total} color="var(--success)" />
+              <StatRow label="Partial"     value={r.partially_covered} total={r.total} color="var(--warning)" />
+              <StatRow label="Not Covered" value={r.not_covered}       total={r.total} color="var(--danger)" />
             </div>
           </div>
         )}
@@ -148,9 +147,9 @@ export function SummaryCard({ summary, index }: { summary: CoverageSummary; inde
               <span className="text-[11px] font-mono text-muted bg-border/30 px-2 py-0.5 rounded">{k.total} total</span>
             </div>
             <div className="space-y-2.5">
-              <StatRow label="Mitigated"   value={k.mitigated}   total={k.total} color="#10b981" />
-              <StatRow label="Unmitigated" value={k.unmitigated} total={k.total} color="#ef4444" />
-              <StatRow label="With LD"     value={k.with_ld}     total={k.total} color="#8b5cf6" />
+              <StatRow label="Mitigated"   value={k.mitigated}   total={k.total} color="var(--success)" />
+              <StatRow label="Unmitigated" value={k.unmitigated} total={k.total} color="var(--danger)" />
+              <StatRow label="With LD"     value={k.with_ld}     total={k.total} color={typeColor('LD')} />
             </div>
           </div>
         )}
@@ -168,14 +167,16 @@ export function CrossDocCard({ item, index }: { item: EvidenceItem; index: numbe
 
   return (
     <div className="rounded-xl bg-bg border border-border overflow-hidden"
-      style={{ borderLeft: '3px solid #06b6d4' }}>
+      style={{ borderLeft: `3px solid ${CROSS_DOC_COLOR}` }}>
 
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/50 bg-cyan-500/5">
-        <span className="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-400 text-[10px] font-mono flex items-center justify-center shrink-0">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/50"
+        style={{ background: `color-mix(in srgb, ${CROSS_DOC_COLOR} 5%, transparent)` }}>
+        <span className="w-5 h-5 rounded-full text-[10px] font-mono flex items-center justify-center shrink-0"
+          style={{ background: `color-mix(in srgb, ${CROSS_DOC_COLOR} 20%, transparent)`, color: CROSS_DOC_COLOR }}>
           {index + 1}
         </span>
-        <Link2 size={11} className="text-cyan-400 shrink-0" />
-        <span className="text-xs font-semibold text-cyan-400 capitalize">{relLabel}</span>
+        <Link2 size={11} className="shrink-0" style={{ color: CROSS_DOC_COLOR }} />
+        <span className="text-xs font-semibold capitalize" style={{ color: CROSS_DOC_COLOR }}>{relLabel}</span>
         <span className="ml-auto text-[10px] font-mono text-muted/60 bg-border/20 px-1.5 py-0.5 rounded">
           cross-document
         </span>
@@ -191,8 +192,8 @@ export function CrossDocCard({ item, index }: { item: EvidenceItem; index: numbe
         </div>
 
         <div className="flex items-center justify-center py-0.5 gap-1">
-          <div className="h-px w-8 bg-cyan-500/25" />
-          <ArrowRight size={10} className="text-cyan-500/50 shrink-0" />
+          <div className="h-px w-8" style={{ background: `color-mix(in srgb, ${CROSS_DOC_COLOR} 25%, transparent)` }} />
+          <ArrowRight size={10} className="shrink-0" style={{ color: `color-mix(in srgb, ${CROSS_DOC_COLOR} 50%, transparent)` }} />
         </div>
 
         <div className="rounded-lg border border-border/50 bg-surface/50 px-3 py-2.5">
@@ -223,7 +224,7 @@ export function EvidenceCard({ item, index }: { item: EvidenceItem; index: numbe
   const reqRef   = item.requirement ?? undefined
   const status   = item.status ?? undefined
 
-  const accent       = type ? (TYPE_COLOR[type] ?? '#64748b') : '#64748b'
+  const accent       = typeColor(type)
   const hasConns     = (item.connections?.length ?? 0) > 0
   const isLong       = text.length > 110
   const isExpandable = isLong || hasConns
@@ -244,7 +245,7 @@ export function EvidenceCard({ item, index }: { item: EvidenceItem; index: numbe
           {/* Index badge */}
           <span
             className="shrink-0 w-5 h-5 rounded-full text-[10px] font-mono flex items-center justify-center mt-0.5"
-            style={{ color: accent, background: `${accent}22` }}
+            style={{ color: accent, background: `color-mix(in srgb, ${accent} 13%, transparent)` }}
           >
             {index + 1}
           </span>
@@ -255,7 +256,7 @@ export function EvidenceCard({ item, index }: { item: EvidenceItem; index: numbe
               {type && (
                 <span
                   className="text-[11px] font-semibold font-mono px-1.5 py-0.5 rounded"
-                  style={{ color: accent, background: `${accent}20` }}
+                  style={{ color: accent, background: `color-mix(in srgb, ${accent} 13%, transparent)` }}
                 >
                   {type}
                 </span>
@@ -271,7 +272,10 @@ export function EvidenceCard({ item, index }: { item: EvidenceItem; index: numbe
               {hasConns && (
                 <span
                   className="ml-auto flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0"
-                  style={{ color: `${accent}99`, background: `${accent}12` }}
+                  style={{
+                    color: `color-mix(in srgb, ${accent} 60%, transparent)`,
+                    background: `color-mix(in srgb, ${accent} 7%, transparent)`,
+                  }}
                 >
                   <GitBranch size={9} />
                   {item.connections!.length}
@@ -339,10 +343,10 @@ export function SourcesSection({ evidence }: { evidence: EvidenceItem[] }) {
   if (evidence.length === 0) return null
 
   const dotColors = evidence.slice(0, 6).map(item => {
-    if (item.summary)                return '#10b981'
-    if (item.cross_doc_relationship) return '#06b6d4'
+    if (item.summary)                return 'var(--success)'
+    if (item.cross_doc_relationship) return CROSS_DOC_COLOR
     const t = item.type ?? (item.risk_text ? 'Risk' : undefined)
-    return t ? (TYPE_COLOR[t] ?? '#64748b') : '#64748b'
+    return typeColor(t)
   })
 
   return (
@@ -362,7 +366,7 @@ export function SourcesSection({ evidence }: { evidence: EvidenceItem[] }) {
           ))}
         </div>
 
-        <div className="flex items-center gap-1.5 text-xs text-muted group-hover:text-slate-300 transition-colors">
+        <div className="flex items-center gap-1.5 text-xs text-muted group-hover:text-foreground transition-colors">
           <BookOpen size={11} />
           <span>{evidence.length} source{evidence.length !== 1 ? 's' : ''}</span>
         </div>

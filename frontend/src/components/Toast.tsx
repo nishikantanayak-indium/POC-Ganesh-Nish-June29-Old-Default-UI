@@ -42,11 +42,10 @@ function ToastBubble({ toast, onDismiss }: { toast: ToastItem; onDismiss: (id: s
       animate={{ opacity: 1, x: 0, scale: 1 }}
       exit={{ opacity: 0, x: 40, scale: 0.92 }}
       transition={{ duration: 0.22, ease: 'easeOut' }}
+      style={{ background: `color-mix(in srgb, var(--${isSuccess ? 'success' : 'danger'}) 8%, var(--bg))` }}
       className={`
         flex items-start gap-3 px-4 py-3 rounded-xl shadow-xl border max-w-sm
-        ${isSuccess
-          ? 'bg-[#0f1a13] border-success/25 text-success'
-          : 'bg-[#1a0f0f] border-danger/25 text-danger'}
+        ${isSuccess ? 'border-success/25 text-success' : 'border-danger/25 text-danger'}
       `}
     >
       <div className="shrink-0 mt-0.5">
