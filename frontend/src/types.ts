@@ -286,6 +286,7 @@ export interface GenKnobs {
   note?: string
   brief?: string
   mirror_document_id?: string
+  split_by_doc_type?: boolean
 }
 
 export interface SyntheticRecordT {

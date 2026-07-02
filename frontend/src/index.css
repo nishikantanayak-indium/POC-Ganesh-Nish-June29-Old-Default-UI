@@ -16,6 +16,11 @@
   --success:      #10b981;
   --warning:      #f59e0b;
   --danger:       #ef4444;
+  /* Fixed categorical order for multi-series charts (validated CVD-safe). */
+  --chart-1:      #3987e5;
+  --chart-2:      #199e70;
+  --chart-3:      #d95926;
+  --chart-4:      #9085e9;
 }
 
 /* ── Light theme ──────────────────────────────────────────────────────── */
@@ -32,6 +37,10 @@
   --success:      #059669;
   --warning:      #d97706;
   --danger:       #dc2626;
+  --chart-1:      #2a78d6;
+  --chart-2:      #1baf7a;
+  --chart-3:      #eb6834;
+  --chart-4:      #4a3aa7;
 }
 
 * {

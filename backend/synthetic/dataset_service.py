@@ -23,6 +23,7 @@ import json
 import logging
 import uuid
 import zipfile
+from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional
@@ -93,6 +94,11 @@ class SyntheticDatasetManagementService:
         doc_types = [DocumentType(d) for d in knobs.get("doc_types", [])] or None
         do_relationships = knobs.get("generate_relationships", True)
         do_documents = knobs.get("assemble_documents", True)
+        # Default: fold every staged record into ONE composite document, even
+        # when the batch spans several doc_types (doc_type stays a content
+        # diversity dimension, not a file-splitting key). Users who explicitly
+        # want one file per doc_type can opt in.
+        split_by_doc_type = knobs.get("split_by_doc_type", False)
         brief = knobs.get("brief") or ""
         mirror_document_id = knobs.get("mirror_document_id")
         max_regen = knobs.get("max_regen")
@@ -234,8 +240,8 @@ class SyntheticDatasetManagementService:
                 doc.artifact_uri = self.store.put_text(key, markdown, "text/markdown")
                 doc.provenance["artifact_key"] = key
                 documents.append(doc)
-            else:
-                progress_cb({"stage": "assemble", "message": "Assembling composite documents"})
+            elif split_by_doc_type:
+                progress_cb({"stage": "assemble", "message": "Assembling one document per document type"})
                 by_doc: Dict[DocumentType, List[SyntheticRecord]] = {}
                 for r in staged:
                     by_doc.setdefault(r.doc_type, []).append(r)
@@ -247,6 +253,18 @@ class SyntheticDatasetManagementService:
                     doc.artifact_uri = self.store.put_text(key, markdown, "text/markdown")
                     doc.provenance["artifact_key"] = key
                     documents.append(doc)
+            else:
+                progress_cb({"stage": "assemble", "message": "Assembling 1 composite document"})
+                # doc_type stays a per-record diversity dimension; the document's
+                # own doc_type is just the most common one in this batch.
+                dtype = Counter(r.doc_type for r in staged).most_common(1)[0][0]
+                doc, markdown = self.gen.assemble_document(
+                    project_id, staged, dtype, version_id=version.id, brief=brief,
+                )
+                key = self._doc_key(project_id, dataset.id, version.version_no, doc.id)
+                doc.artifact_uri = self.store.put_text(key, markdown, "text/markdown")
+                doc.provenance["artifact_key"] = key
+                documents.append(doc)
 
         # ── persist everything ───────────────────────────────────────────
         progress_cb({"stage": "persist", "message": "Persisting records, reports, artifacts"})

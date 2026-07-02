@@ -37,7 +37,9 @@ export default function GenerateTab({
   const [intent, setIntent] = useState<Intent>('describe')
   const [brief, setBrief] = useState('')
   const [genRelationships, setGenRelationships] = useState(true)
-  const [assembleDocs, setAssembleDocs] = useState(true)
+  // 'none' = don't assemble documents at all; 'single' = fold everything into
+  // one composite doc (default); 'split' = one doc per document type.
+  const [docOutput, setDocOutput] = useState<'none' | 'single' | 'split'>('single')
 
   // describe
   const [describeTypes, setDescribeTypes] = useState<Set<string>>(new Set())
@@ -164,7 +166,8 @@ export default function GenerateTab({
     const { selections, mirror } = buildSelections()
     if (!canRun) return
     setRunning(true); setEvents([]); setSummary(null); setStage('queued')
-    const knobs: GenKnobs = { generate_relationships: genRelationships, assemble_documents: assembleDocs }
+    const knobs: GenKnobs = { generate_relationships: genRelationships, assemble_documents: docOutput !== 'none' }
+    if (docOutput === 'split' && intent !== 'mirror') knobs.split_by_doc_type = true
     if (brief.trim()) knobs.brief = brief.trim()
     if (mirror) knobs.mirror_document_id = mirror
     abortRef.current = streamGenerate(
@@ -442,9 +445,17 @@ export default function GenerateTab({
               <input type="checkbox" checked={genRelationships} onChange={e => setGenRelationships(e.target.checked)} className="accent-[var(--primary)]" />
               Relationship examples
             </label>
-            <label className="flex items-center gap-2 text-xs text-muted cursor-pointer">
-              <input type="checkbox" checked={assembleDocs} onChange={e => setAssembleDocs(e.target.checked)} className="accent-[var(--primary)]" />
-              Composite documents
+            <label className="flex items-center gap-2 text-xs text-muted">
+              Documents
+              <select
+                value={intent === 'mirror' && docOutput === 'split' ? 'single' : docOutput}
+                onChange={e => setDocOutput(e.target.value as 'none' | 'single' | 'split')}
+                className="bg-surface border border-border rounded px-2 py-1 text-xs text-foreground focus:outline-none focus:border-primary cursor-pointer"
+              >
+                <option value="none">Don't assemble</option>
+                <option value="single">One combined document</option>
+                {intent !== 'mirror' && <option value="split">One document per doc type</option>}
+              </select>
             </label>
           </div>
 

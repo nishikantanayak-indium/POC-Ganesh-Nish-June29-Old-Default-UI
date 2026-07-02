@@ -23,19 +23,44 @@ function Gauge({ label, value, hint }: { label: string; value: number; hint?: st
   )
 }
 
-function BarChart({ title, data }: { title: string; data: Record<string, number> }) {
+// Fixed categorical order — each chart keeps its own hue across the whole
+// dashboard so "by label" is always blue, "by industry" always violet, etc.
+// (identity by chart, not by bar — every bar within a chart shares that hue).
+const CHART_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)']
+
+// A matrix cell key comes across the wire as "ElementType|Label" — render it
+// as a two-part chip (type, then label) instead of a raw pipe-delimited string.
+function CellChip({ cellKey, tone }: { cellKey: string; tone: string }) {
+  const [type, label] = cellKey.split('|')
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[11px] font-mono px-2 py-0.5 rounded-md border"
+      style={{ color: tone, borderColor: `color-mix(in srgb, ${tone} 35%, transparent)`, background: `color-mix(in srgb, ${tone} 12%, transparent)` }}
+    >
+      {type}{label && <><span className="opacity-40">/</span>{label}</>}
+    </span>
+  )
+}
+
+function BarChart({ title, data, color }: { title: string; data: Record<string, number>; color: string }) {
   const entries = Object.entries(data).sort((a, b) => b[1] - a[1])
   const max = Math.max(1, ...entries.map(e => e[1]))
   if (!entries.length) return null
   return (
     <div className="rounded-xl border border-border bg-surface p-4">
-      <p className="text-[10px] font-semibold text-muted/70 uppercase tracking-widest mb-2.5">{title}</p>
+      <p className="text-[10px] font-semibold text-muted/70 uppercase tracking-widest mb-2.5 flex items-center gap-1.5">
+        <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+        {title}
+      </p>
       <div className="space-y-1.5">
         {entries.map(([k, v]) => (
-          <div key={k} className="flex items-center gap-2">
-            <span className="text-[11px] font-mono text-muted w-28 truncate shrink-0" title={k}>{k}</span>
-            <div className="flex-1 h-4 bg-card rounded overflow-hidden">
-              <div className="h-full bg-primary/60 rounded" style={{ width: `${(v / max) * 100}%` }} />
+          <div key={k} className="flex items-center gap-2 group" title={`${k}: ${v}`}>
+            <span className="text-[11px] font-mono text-muted w-28 truncate shrink-0">{k}</span>
+            <div className="flex-1 h-4 bg-bg rounded overflow-hidden">
+              <div
+                className="h-full rounded transition-all group-hover:brightness-125"
+                style={{ width: `${Math.max((v / max) * 100, 3)}%`, background: color }}
+              />
             </div>
             <span className="text-[11px] font-mono text-foreground w-6 text-right shrink-0">{v}</span>
           </div>
@@ -104,30 +129,36 @@ export default function QualityTab({ version }: Props) {
 
         {dist && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <BarChart title="By label" data={dist.by_label} />
-            <BarChart title="By element type" data={dist.by_element_type} />
-            <BarChart title="By document type" data={dist.by_doc_type} />
-            <BarChart title="By industry" data={dist.by_industry} />
+            <BarChart title="By label" data={dist.by_label} color={CHART_COLORS[0]} />
+            <BarChart title="By element type" data={dist.by_element_type} color={CHART_COLORS[1]} />
+            <BarChart title="By document type" data={dist.by_doc_type} color={CHART_COLORS[2]} />
+            <BarChart title="By industry" data={dist.by_industry} color={CHART_COLORS[3]} />
           </div>
         )}
 
         {dist && (dist.under_represented.length > 0 || dist.over_represented.length > 0) && (
-          <div className="rounded-xl border border-border bg-surface p-4 space-y-2">
+          <div className="rounded-xl border border-border bg-surface p-4 space-y-3">
             {dist.under_represented.length > 0 && (
               <div className="flex items-start gap-2">
-                <AlertTriangle size={13} className="text-warning mt-0.5 shrink-0" />
-                <div>
-                  <span className="text-xs text-muted">Under-represented cells: </span>
-                  {dist.under_represented.map(c => <span key={c} className="text-[11px] font-mono text-warning mr-1.5">{c}</span>)}
+                <AlertTriangle size={13} className="text-warning mt-1 shrink-0" />
+                <div className="space-y-1">
+                  <p className="text-xs text-foreground font-medium">Under-represented cells</p>
+                  <p className="text-[11px] text-muted/70">Fewer generated records than this project's minimum threshold — generate more here.</p>
+                  <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    {dist.under_represented.map(c => <CellChip key={c} cellKey={c} tone="var(--warning)" />)}
+                  </div>
                 </div>
               </div>
             )}
             {dist.over_represented.length > 0 && (
               <div className="flex items-start gap-2">
-                <AlertTriangle size={13} className="text-primary mt-0.5 shrink-0" />
-                <div>
-                  <span className="text-xs text-muted">Over-represented cells: </span>
-                  {dist.over_represented.map(c => <span key={c} className="text-[11px] font-mono text-primary mr-1.5">{c}</span>)}
+                <AlertTriangle size={13} className="mt-1 shrink-0" style={{ color: 'var(--chart-4)' }} />
+                <div className="space-y-1">
+                  <p className="text-xs text-foreground font-medium">Over-represented cells</p>
+                  <p className="text-[11px] text-muted/70">More than double the average count for a cell — the dataset is skewed toward these.</p>
+                  <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    {dist.over_represented.map(c => <CellChip key={c} cellKey={c} tone="var(--chart-4)" />)}
+                  </div>
                 </div>
               </div>
             )}
@@ -136,15 +167,28 @@ export default function QualityTab({ version }: Props) {
 
         {duplicates.length > 0 && (
           <div className="rounded-xl border border-border bg-surface p-4">
-            <p className="text-[10px] font-semibold text-muted/70 uppercase tracking-widest mb-2 flex items-center gap-1.5"><Copy size={11} /> Duplicate clusters</p>
-            <div className="space-y-1">
-              {duplicates.map(d => (
-                <div key={d.quality!.record_id} className="flex items-center gap-2 text-[11px]">
-                  <span className="font-mono text-warning">{d.quality!.near_dup_score.toFixed(2)}</span>
-                  <span className="text-foreground truncate flex-1">{recById[d.quality!.record_id]?.text ?? d.quality!.record_id}</span>
-                  <span className="text-muted font-mono">↔ {d.quality!.duplicate_of?.slice(0, 14)}</span>
-                </div>
-              ))}
+            <p className="text-[10px] font-semibold text-muted/70 uppercase tracking-widest mb-1 flex items-center gap-1.5"><Copy size={11} /> Duplicate clusters</p>
+            <p className="text-[11px] text-muted/70 mb-3">Records flagged as near-duplicates of another record already in this dataset (similarity score ≥ 0.90) and excluded from the staged set.</p>
+            <div className="space-y-2">
+              {duplicates.map(d => {
+                const q = d.quality!
+                const other = q.duplicate_of ? recById[q.duplicate_of] : undefined
+                return (
+                  <div key={q.record_id} className="rounded-lg border border-border bg-bg p-2.5 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-warning/15 text-warning shrink-0">
+                        {(q.near_dup_score * 100).toFixed(0)}% similar
+                      </span>
+                      <span className="text-[10px] text-muted/60">flagged record vs. its closest match</span>
+                    </div>
+                    <p className="text-[11px] text-foreground leading-snug line-clamp-2">{recById[q.record_id]?.text ?? q.record_id}</p>
+                    <div className="flex items-start gap-1.5 pl-2 border-l-2 border-border">
+                      <span className="text-[10px] text-muted/60 shrink-0 mt-0.5">matches</span>
+                      <p className="text-[11px] text-muted leading-snug line-clamp-2">{other?.text ?? q.duplicate_of}</p>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}
