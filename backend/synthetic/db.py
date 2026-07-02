@@ -45,6 +45,9 @@ from .models import (
 # ---------------------------------------------------------------------------
 
 
+_DEFAULT_LABELS = [l.value for l in TaxonomyLabel]
+
+
 @dataclass
 class Project:
     id: str
@@ -52,8 +55,13 @@ class Project:
     description: str
     min_threshold: int
     seed_summary: Optional[dict]
+    labels: Optional[list]
     created_at: datetime
     updated_at: datetime
+
+    @property
+    def label_set(self) -> list:
+        return [l for l in (self.labels or []) if str(l).strip()] or list(_DEFAULT_LABELS)
 
     def to_dict(self) -> dict:
         return {
@@ -62,6 +70,7 @@ class Project:
             "description": self.description,
             "min_threshold": self.min_threshold,
             "seed_summary": self.seed_summary,
+            "labels": self.label_set,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -141,10 +150,13 @@ def init_synthetic_db() -> None:
                 description   TEXT NOT NULL DEFAULT '',
                 min_threshold INTEGER NOT NULL DEFAULT 5,
                 seed_summary  JSONB,
+                labels        JSONB,
                 created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+        # Migration for pre-existing installs (CREATE IF NOT EXISTS won't add columns).
+        cur.execute("ALTER TABLE synthetic_projects ADD COLUMN IF NOT EXISTS labels JSONB")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS synthetic_datasets (
                 id         TEXT PRIMARY KEY,
@@ -286,19 +298,50 @@ def _ensure_init() -> None:
 # ---------------------------------------------------------------------------
 
 
-def create_project(name: str, description: str = "", min_threshold: Optional[int] = None) -> Project:
+def create_project(
+    name: str, description: str = "", min_threshold: Optional[int] = None,
+    labels: Optional[list] = None,
+) -> Project:
     _ensure_init()
     pid = str(uuid.uuid4())
     thr = min_threshold if min_threshold is not None else settings.synthetic_min_threshold
+    clean_labels = [str(l).strip() for l in (labels or []) if str(l).strip()] or None
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
-            "INSERT INTO synthetic_projects (id, name, description, min_threshold) "
-            "VALUES (%s, %s, %s, %s) RETURNING *",
-            (pid, name.strip(), description.strip(), thr),
+            "INSERT INTO synthetic_projects (id, name, description, min_threshold, labels) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING *",
+            (pid, name.strip(), description.strip(), thr,
+             json.dumps(clean_labels) if clean_labels else None),
         )
         row = cur.fetchone()
         conn.commit()
         return Project(**dict(row))
+
+
+def update_project(
+    project_id: str, name: Optional[str] = None, description: Optional[str] = None,
+    min_threshold: Optional[int] = None, labels: Optional[list] = None,
+) -> Optional[Project]:
+    _ensure_init()
+    sets, params = [], []
+    if name is not None:
+        sets.append("name = %s"); params.append(name.strip())
+    if description is not None:
+        sets.append("description = %s"); params.append(description.strip())
+    if min_threshold is not None:
+        sets.append("min_threshold = %s"); params.append(min_threshold)
+    if labels is not None:
+        clean = [str(l).strip() for l in labels if str(l).strip()]
+        sets.append("labels = %s"); params.append(json.dumps(clean) if clean else None)
+    if not sets:
+        return get_project(project_id)
+    sets.append("updated_at = NOW()")
+    params.append(project_id)
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"UPDATE synthetic_projects SET {', '.join(sets)} WHERE id = %s RETURNING *", params)
+        row = cur.fetchone()
+        conn.commit()
+        return Project(**dict(row)) if row else None
 
 
 def list_projects() -> List[Project]:
@@ -405,6 +448,22 @@ def list_versions(project_id: str) -> List[Version]:
         return [Version(**dict(r)) for r in cur.fetchall()]
 
 
+def version_status_counts(project_id: str) -> Dict[str, Dict[str, int]]:
+    """Live record-status breakdown per version — reflects SME verdicts as they
+    happen (so the Datasets tab isn't stuck on generation-time counts)."""
+    _ensure_init()
+    out: Dict[str, Dict[str, int]] = {}
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT version_id, status, COUNT(*) FROM synthetic_records "
+            "WHERE project_id = %s AND version_id IS NOT NULL GROUP BY version_id, status",
+            (project_id,),
+        )
+        for version_id, status, count in cur.fetchall():
+            out.setdefault(version_id, {})[status] = count
+    return out
+
+
 def update_version_stats(version_id: str, stats: dict, artifact_uri: str = "") -> None:
     _ensure_init()
     with _conn() as conn, conn.cursor() as cur:
@@ -431,6 +490,17 @@ def set_version_status(version_id: str, status: DatasetStatus) -> None:
         conn.commit()
 
 
+def delete_version(version_id: str) -> bool:
+    """Delete a version; records / relationships / documents / reports / reviews
+    cascade via their foreign keys."""
+    _ensure_init()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM synthetic_versions WHERE id = %s", (version_id,))
+        deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
+
+
 # ---------------------------------------------------------------------------
 # Records
 # ---------------------------------------------------------------------------
@@ -442,7 +512,7 @@ def _row_to_record(d: dict) -> SyntheticRecord:
         project_id=d["project_id"],
         version_id=d.get("version_id"),
         element_type=ElementType(d["element_type"]),
-        label=TaxonomyLabel(d["label"]),
+        label=d["label"],
         text=d["text"],
         rationale=d.get("rationale", ""),
         industry=d.get("industry", "General"),
@@ -475,7 +545,7 @@ def insert_records(records: List[SyntheticRecord]) -> None:
                  embedding_id = EXCLUDED.embedding_id""",
             [
                 (
-                    r.id, r.project_id, r.version_id, r.element_type.value, r.label.value,
+                    r.id, r.project_id, r.version_id, r.element_type.value, r.label,
                     r.text, r.rationale, r.industry, r.doc_type.value, r.language,
                     r.risk_category, r.clause_structure, r.status.value,
                     json.dumps(r.attributes), json.dumps(r.provenance), r.embedding_id,
@@ -498,7 +568,7 @@ def update_record_status(record_id: str, status: RecordStatus) -> None:
 
 def update_record_content(
     record_id: str, text: Optional[str] = None,
-    label: Optional[TaxonomyLabel] = None, status: Optional[RecordStatus] = None,
+    label: Optional[str] = None, status: Optional[RecordStatus] = None,
 ) -> None:
     """Apply an SME edit / relabel / status change to a single record."""
     _ensure_init()
@@ -506,7 +576,7 @@ def update_record_content(
     if text is not None:
         sets.append("text = %s"); params.append(text)
     if label is not None:
-        sets.append("label = %s"); params.append(label.value)
+        sets.append("label = %s"); params.append(label)
     if status is not None:
         sets.append("status = %s"); params.append(status.value)
     if not sets:

@@ -98,13 +98,13 @@ class S3ArtifactStore:
         return keys
 
     def delete_prefix(self, prefix: str) -> None:
-        keys = self.list(prefix)
-        if not keys:
-            return
-        self._client.delete_objects(
-            Bucket=self._bucket,
-            Delete={"Objects": [{"Key": k} for k in keys]},
-        )
+        # Delete objects one-by-one: the batch delete_objects call requires a
+        # Content-MD5 header that some MinIO builds reject; single deletes don't.
+        for key in self.list(prefix):
+            try:
+                self._client.delete_object(Bucket=self._bucket, Key=key)
+            except Exception as exc:  # pragma: no cover
+                logger.warning("delete_object failed for %s: %s", key, exc)
 
     def exists(self, key: str) -> bool:
         try:

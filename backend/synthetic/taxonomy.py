@@ -15,17 +15,24 @@ from core.models import CoverageStatus, DocumentType, ElementType, RelationshipT
 from .models import MatrixCell, SyntheticRelationship, TaxonomyLabel
 
 # ---------------------------------------------------------------------------
-# Approved dictionaries (drive Label Validity)
+# Default taxonomy labels
 # ---------------------------------------------------------------------------
+#
+# Labels are now *strings* and configurable per project (a project may add its
+# own, e.g. "Insurance", "Data Privacy"). ``TaxonomyLabel`` remains the seed
+# for the default set. Element TYPES stay a fixed enum — they are a structural
+# contract with the Analysis knowledge graph.
 
-TAXONOMY_DESCRIPTIONS: Dict[TaxonomyLabel, str] = {
-    TaxonomyLabel.LEGAL: "Legal terms, obligations, governing law, indemnity, IP, dispute resolution.",
-    TaxonomyLabel.FINANCIAL: "Pricing, payment terms, invoicing, advance payments, fees, financial caps.",
-    TaxonomyLabel.TECHNICAL: "Technical specifications, deliverables, architecture, SLAs on performance.",
-    TaxonomyLabel.KPI: "Measurable performance targets, service levels, uptime, response/resolution times.",
-    TaxonomyLabel.RISK: "Potential negative outcomes, breach scenarios, exposure and their likelihood.",
-    TaxonomyLabel.COMPLIANCE: "Regulatory, statutory, audit, certification and policy-adherence obligations.",
-    TaxonomyLabel.LIQUIDATED_DAMAGES: "Pre-agreed monetary penalties for defined non-performance events.",
+DEFAULT_LABELS: List[str] = [l.value for l in TaxonomyLabel]
+
+TAXONOMY_DESCRIPTIONS: Dict[str, str] = {
+    "Legal": "Legal terms, obligations, governing law, indemnity, IP, dispute resolution.",
+    "Financial": "Pricing, payment terms, invoicing, advance payments, fees, financial caps.",
+    "Technical": "Technical specifications, deliverables, architecture, SLAs on performance.",
+    "KPI": "Measurable performance targets, service levels, uptime, response/resolution times.",
+    "Risk": "Potential negative outcomes, breach scenarios, exposure and their likelihood.",
+    "Compliance": "Regulatory, statutory, audit, certification and policy-adherence obligations.",
+    "Liquidated Damages": "Pre-agreed monetary penalties for defined non-performance events.",
 }
 
 ELEMENT_DESCRIPTIONS: Dict[ElementType, str] = {
@@ -47,53 +54,51 @@ DEFAULT_DOC_TYPES: List[DocumentType] = [
 ]
 
 # ---------------------------------------------------------------------------
-# The ElementType × TaxonomyLabel matrix
+# The ElementType × Label matrix (label set is per project)
 # ---------------------------------------------------------------------------
 
-# All combinations are valid cells (2-level matrix), so coverage/diversity
-# analysis spans the full space. RECOMMENDED_LABELS marks the natural pairings
-# that the UI pre-selects and that generation prompts lean toward.
-RECOMMENDED_LABELS: Dict[ElementType, List[TaxonomyLabel]] = {
-    ElementType.REQUIREMENT: [
-        TaxonomyLabel.TECHNICAL, TaxonomyLabel.KPI, TaxonomyLabel.COMPLIANCE, TaxonomyLabel.LEGAL,
-    ],
-    ElementType.CLAUSE: [
-        TaxonomyLabel.LEGAL, TaxonomyLabel.FINANCIAL, TaxonomyLabel.COMPLIANCE, TaxonomyLabel.TECHNICAL,
-    ],
-    ElementType.RISK: [
-        TaxonomyLabel.RISK, TaxonomyLabel.COMPLIANCE, TaxonomyLabel.FINANCIAL, TaxonomyLabel.TECHNICAL,
-    ],
-    ElementType.MITIGATION: [
-        TaxonomyLabel.RISK, TaxonomyLabel.COMPLIANCE, TaxonomyLabel.TECHNICAL,
-    ],
-    ElementType.LD: [
-        TaxonomyLabel.LIQUIDATED_DAMAGES, TaxonomyLabel.FINANCIAL, TaxonomyLabel.KPI,
-    ],
+# Natural pairings the UI pre-selects / generation leans toward (default labels).
+RECOMMENDED_LABELS: Dict[ElementType, List[str]] = {
+    ElementType.REQUIREMENT: ["Technical", "KPI", "Compliance", "Legal"],
+    ElementType.CLAUSE: ["Legal", "Financial", "Compliance", "Technical"],
+    ElementType.RISK: ["Risk", "Compliance", "Financial", "Technical"],
+    ElementType.MITIGATION: ["Risk", "Compliance", "Technical"],
+    ElementType.LD: ["Liquidated Damages", "Financial", "KPI"],
 }
 
 
-def all_cells() -> List[MatrixCell]:
-    """Every valid (ElementType × TaxonomyLabel) cell — 5 × 7 = 35."""
-    return [MatrixCell(et, lbl) for et in ElementType for lbl in TaxonomyLabel]
+def resolve_labels(labels: Optional[List[str]]) -> List[str]:
+    """Return a usable label set — the project's labels or the defaults."""
+    return [l for l in (labels or []) if str(l).strip()] or list(DEFAULT_LABELS)
 
 
-def recommended_cells() -> List[MatrixCell]:
-    """The natural pairings, pre-selected in the UI."""
+def all_cells(labels: Optional[List[str]] = None) -> List[MatrixCell]:
+    """Every (ElementType × label) cell for the given label set."""
+    lbls = resolve_labels(labels)
+    return [MatrixCell(et, lbl) for et in ElementType for lbl in lbls]
+
+
+def recommended_cells(labels: Optional[List[str]] = None) -> List[MatrixCell]:
+    """Natural pairings that also exist in the given label set."""
+    lbls = set(resolve_labels(labels))
     return [
         MatrixCell(et, lbl)
-        for et, labels in RECOMMENDED_LABELS.items()
-        for lbl in labels
+        for et, rec in RECOMMENDED_LABELS.items()
+        for lbl in rec if lbl in lbls
     ]
 
 
-def is_valid_cell(cell: MatrixCell) -> bool:
-    """All element/label pairings are permitted in the 2-level matrix."""
-    return isinstance(cell.element_type, ElementType) and isinstance(cell.label, TaxonomyLabel)
+def is_valid_cell(cell: MatrixCell, labels: Optional[List[str]] = None) -> bool:
+    return isinstance(cell.element_type, ElementType) and cell.label in resolve_labels(labels)
 
 
-def is_valid_label(label: str) -> bool:
-    """Label Validity: is *label* a member of the approved taxonomy?"""
-    return label in {l.value for l in TaxonomyLabel}
+def is_valid_label(label: str, labels: Optional[List[str]] = None) -> bool:
+    """Label Validity: is *label* a member of this project's taxonomy?"""
+    return label in resolve_labels(labels)
+
+
+def label_description(label: str) -> str:
+    return TAXONOMY_DESCRIPTIONS.get(label, "")
 
 
 # ---------------------------------------------------------------------------

@@ -221,6 +221,7 @@ export interface StudioProject {
   name: string
   description: string
   min_threshold: number
+  labels?: string[]
   seed_summary?: { counts?: Record<string, number>; documents?: unknown[] } | null
   created_at: string
   updated_at: string
@@ -251,6 +252,8 @@ export interface SeedDocument {
 export interface StudioOverview {
   project_id: string
   min_threshold: number
+  labels?: string[]
+  suggested_labels?: string[]
   cells: MatrixCellInfo[]
   under_threshold: string[]
   seed_documents: SeedDocument[]
@@ -270,7 +273,9 @@ export interface StudioMeta {
   relationship_schema: unknown
 }
 
-export interface GenSelection { cell: string; count: number }
+// A generation target: a fixed cell (Balance mode) or an element type whose
+// label the model assigns (Describe mode).
+export interface GenSelection { cell?: string; element_type?: string; count: number }
 
 export interface GenKnobs {
   industries?: string[]
@@ -351,15 +356,37 @@ export interface DistributionStats {
   relationships?: { by_type?: Record<string, number>; positive?: number; negative?: number }
 }
 
+export interface Publication {
+  workspace_id: string
+  elements: number
+  relationships: number
+  at: string
+}
+
 export interface VersionStats {
-  requested: number
-  generated: number
+  requested?: number
+  generated?: number
   staged: number
-  rejected: number
-  duplicates: number
+  rejected?: number
+  duplicates?: number
   relationships: number
   documents: number
   distribution: DistributionStats
+  published_to?: Publication[]
+  cloned_from?: string
+  cloned_from_version_no?: number
+}
+
+export interface SyntheticDocumentT {
+  id: string
+  project_id: string
+  version_id: string | null
+  doc_type: string
+  title: string
+  member_record_ids: string[]
+  sections: { heading: string; record_ids: string[] }[]
+  artifact_uri: string
+  status: string
 }
 
 export interface StudioVersion {
@@ -371,6 +398,7 @@ export interface StudioVersion {
   note: string
   artifact_uri: string
   stats: VersionStats | null
+  status_counts?: Record<string, number>
   created_at: string
 }
 

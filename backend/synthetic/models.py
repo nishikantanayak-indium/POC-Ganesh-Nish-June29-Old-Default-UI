@@ -20,6 +20,10 @@ from core.models import CoverageStatus, DocumentType, ElementType, RelationshipT
 # ---------------------------------------------------------------------------
 
 
+class VersionImmutableError(RuntimeError):
+    """Raised when attempting to mutate a version that is promoted to main."""
+
+
 class TaxonomyLabel(str, Enum):
     """Approved business-taxonomy classification labels."""
 
@@ -67,19 +71,19 @@ class MatrixCell:
     """A single cell of the ElementType × TaxonomyLabel coverage matrix."""
 
     element_type: ElementType
-    label: TaxonomyLabel
+    label: str          # a taxonomy label string (project-configurable)
 
     @property
     def key(self) -> str:
-        return f"{self.element_type.value}|{self.label.value}"
+        return f"{self.element_type.value}|{self.label}"
 
     @classmethod
     def from_key(cls, key: str) -> "MatrixCell":
         et, lbl = key.split("|", 1)
-        return cls(ElementType(et), TaxonomyLabel(lbl))
+        return cls(ElementType(et), lbl)
 
     def to_dict(self) -> dict:
-        return {"element_type": self.element_type.value, "label": self.label.value, "key": self.key}
+        return {"element_type": self.element_type.value, "label": self.label, "key": self.key}
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +105,7 @@ class SyntheticRecord:
     id: str
     project_id: str
     element_type: ElementType
-    label: TaxonomyLabel
+    label: str          # taxonomy label string (validated against the project's label set)
     text: str
     rationale: str = ""
     industry: str = "General"
@@ -126,7 +130,7 @@ class SyntheticRecord:
             "project_id": self.project_id,
             "version_id": self.version_id,
             "element_type": self.element_type.value,
-            "label": self.label.value,
+            "label": self.label,
             "cell": self.cell.key,
             "text": self.text,
             "rationale": self.rationale,

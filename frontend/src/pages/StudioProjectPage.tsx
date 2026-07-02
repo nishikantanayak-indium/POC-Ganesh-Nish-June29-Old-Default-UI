@@ -62,7 +62,10 @@ export default function StudioProjectPage() {
   const changeTab = useCallback((next: Tab) => {
     navigate(`/studio/project/${projectId}/${next}`)
     setVisited(prev => prev.has(next) ? prev : new Set([...prev, next]))
-  }, [navigate, projectId])
+    // Datasets shows live per-version review counts — refresh on entry so SME
+    // verdicts made in the SME tab are reflected here.
+    if (next === 'datasets') reloadVersions()
+  }, [navigate, projectId, reloadVersions])
 
   // When a generation completes, refresh everything and jump the user to Validate.
   const onGenerationComplete = useCallback(async (newVersionId: string) => {
@@ -157,7 +160,7 @@ export default function StudioProjectPage() {
         {visited.has('datasets') && (
           <div style={tabStyle('datasets')}>
             <DatasetsTab projectId={projectId} versions={versions}
-              onReloadVersions={reloadVersions} onToast={addToast} />
+              onReloadVersions={reloadVersions} onSelectVersion={setActiveVersionId} onToast={addToast} />
           </div>
         )}
       </main>

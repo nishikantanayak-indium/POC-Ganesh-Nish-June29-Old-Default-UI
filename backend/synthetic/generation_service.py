@@ -20,12 +20,10 @@ from core.exceptions import ExtractionError
 from core.models import AtomicElement, CoverageStatus, DocumentType, ElementType, RelationshipType
 
 from .models import (
-    MatrixCell,
     RecordStatus,
     SyntheticDocument,
     SyntheticRecord,
     SyntheticRelationship,
-    TaxonomyLabel,
 )
 from .schemas import REQUIRED_ATTRS
 from . import taxonomy
@@ -46,61 +44,80 @@ def _new_id(et: ElementType) -> str:
 # OpenAI tool schemas
 # ---------------------------------------------------------------------------
 
-_CLASSIFY_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "classify",
-        "description": "Assign an approved taxonomy label to each element.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "assignments": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "string"},
-                            "label": {"type": "string", "enum": [l.value for l in TaxonomyLabel]},
+def _classify_tool(labels: List[str]) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "classify",
+            "description": "Assign the single best taxonomy label to each element.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "assignments": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "label": {"type": "string", "enum": labels},
+                            },
+                            "required": ["id", "label"],
                         },
-                        "required": ["id", "label"],
-                    },
-                }
+                    }
+                },
+                "required": ["assignments"],
             },
-            "required": ["assignments"],
         },
-    },
-}
+    }
 
-_GENERATE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "emit_records",
-        "description": "Emit synthetic procurement records.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "records": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "text": {"type": "string"},
-                            "rationale": {"type": "string"},
-                            "industry": {"type": "string"},
-                            "doc_type": {"type": "string", "enum": [d.value for d in DocumentType]},
-                            "language": {"type": "string"},
-                            "risk_category": {"type": "string"},
-                            "clause_structure": {"type": "string"},
-                            "attributes": {"type": "object", "additionalProperties": True},
-                        },
-                        "required": ["text", "rationale", "attributes"],
-                    },
-                }
+
+def _suggest_tool() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "suggest_labels",
+            "description": "Propose a concise classification taxonomy derived from the content.",
+            "parameters": {
+                "type": "object",
+                "properties": {"labels": {"type": "array", "items": {"type": "string"}}},
+                "required": ["labels"],
             },
-            "required": ["records"],
         },
-    },
-}
+    }
+
+
+def _generate_tool(auto_label: bool, allowed_labels: List[str]) -> dict:
+    item_props = {
+        "text": {"type": "string"},
+        "rationale": {"type": "string"},
+        "industry": {"type": "string"},
+        "doc_type": {"type": "string", "enum": [d.value for d in DocumentType]},
+        "language": {"type": "string"},
+        "risk_category": {"type": "string"},
+        "clause_structure": {"type": "string"},
+        "attributes": {"type": "object", "additionalProperties": True},
+    }
+    required = ["text", "rationale", "attributes"]
+    if auto_label:
+        # Describe mode: the model chooses the most fitting label per record.
+        item_props["label"] = {"type": "string", "enum": allowed_labels}
+        required.append("label")
+    return {
+        "type": "function",
+        "function": {
+            "name": "emit_records",
+            "description": "Emit synthetic procurement records.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "records": {"type": "array", "items": {
+                        "type": "object", "properties": item_props, "required": required,
+                    }}
+                },
+                "required": ["records"],
+            },
+        },
+    }
 
 _RELATE_TOOL = {
     "type": "function",
@@ -171,34 +188,71 @@ class SyntheticDataGenerationService:
     # Seed classification (for the gap-analysis overview)
     # ------------------------------------------------------------------
 
-    def classify_elements(self, elements: List[AtomicElement]) -> Dict[str, TaxonomyLabel]:
-        """Return {element_id: TaxonomyLabel} using the approved taxonomy."""
+    def classify_elements(
+        self, elements: List[AtomicElement], labels: Optional[List[str]] = None,
+    ) -> Dict[str, str]:
+        """Return {element_id: label} using the project's label set."""
         if not elements:
             return {}
-        out: Dict[str, TaxonomyLabel] = {}
-        desc = "\n".join(f"- {l.value}: {d}" for l, d in taxonomy.TAXONOMY_DESCRIPTIONS.items())
-        # Batch to keep prompts bounded.
+        label_set = taxonomy.resolve_labels(labels)
+        out: Dict[str, str] = {}
+        desc = "\n".join(
+            f"- {lbl}: {taxonomy.label_description(lbl) or '(project-defined category)'}"
+            for lbl in label_set
+        )
+        tool = _classify_tool(label_set)
         for i in range(0, len(elements), 40):
             batch = elements[i:i + 40]
             listing = "\n".join(f"{e.id} [{e.type.value}]: {e.text[:200]}" for e in batch)
             system = (
-                "You classify procurement elements into ONE approved taxonomy label.\n"
-                f"Approved labels:\n{desc}\n"
+                "You classify procurement elements into ONE label from this set.\n"
+                f"Labels:\n{desc}\n"
                 "Choose the single best-fitting label for each element."
             )
-            data = self._call(system, f"Classify:\n{listing}", _CLASSIFY_TOOL, "classify",
+            data = self._call(system, f"Classify:\n{listing}", tool, "classify",
                               max_tokens=2000, temperature=0)
             for a in data.get("assignments", []):
-                try:
-                    out[a["id"]] = TaxonomyLabel(a["label"])
-                except (KeyError, ValueError):
-                    continue
-        # Any element the model skipped defaults to its recommended label.
+                lbl = a.get("label")
+                if lbl in label_set:
+                    out[a["id"]] = lbl
+        # Any element the model skipped defaults to a recommended (or first) label.
         for e in elements:
             if e.id not in out:
-                rec = taxonomy.RECOMMENDED_LABELS.get(e.type)
-                out[e.id] = rec[0] if rec else TaxonomyLabel.LEGAL
+                rec = [l for l in taxonomy.RECOMMENDED_LABELS.get(e.type, []) if l in label_set]
+                out[e.id] = rec[0] if rec else label_set[0]
         return out
+
+    def suggest_labels(
+        self, elements: List[AtomicElement], existing_labels: Optional[List[str]] = None,
+        max_labels: int = 10,
+    ) -> List[str]:
+        """Propose a taxonomy of concise category labels derived from the seed
+        content. Reuses fitting existing labels and adds new ones for uncovered
+        themes — advisory only (the user adopts what they want)."""
+        if not elements:
+            return []
+        existing = taxonomy.resolve_labels(existing_labels)
+        sample = elements[:60]
+        listing = "\n".join(f"- [{e.type.value}] {e.text[:160]}" for e in sample)
+        system = (
+            "You are designing a classification taxonomy for procurement / contract content.\n"
+            f"Propose up to {max_labels} concise category labels (1-3 words each, Title Case) that best "
+            "organize the elements below for downstream classification.\n"
+            f"Reuse these existing labels where they fit: {existing}. "
+            "Add new labels only for distinct themes not already covered. Return a deduplicated list."
+        )
+        try:
+            data = self._call(system, f"Elements:\n{listing}", _suggest_tool(), "suggest_labels",
+                              max_tokens=500, temperature=0.2)
+        except Exception as exc:
+            logger.warning("Label suggestion failed: %s", exc)
+            return []
+        out: List[str] = []
+        for lbl in data.get("labels", []):
+            s = str(lbl).strip()
+            if s and s not in out:
+                out.append(s)
+        return out[:max_labels]
 
     # ------------------------------------------------------------------
     # Record generation
@@ -207,8 +261,10 @@ class SyntheticDataGenerationService:
     def generate_records(
         self,
         project_id: str,
-        cell: MatrixCell,
+        element_type: ElementType,
         count: int,
+        label: Optional[str] = None,          # fixed label (Balance mode) or None → model assigns (Describe)
+        allowed_labels: Optional[List[str]] = None,
         seeds: Optional[List[str]] = None,
         industries: Optional[List[str]] = None,
         languages: Optional[List[str]] = None,
@@ -216,31 +272,44 @@ class SyntheticDataGenerationService:
         version_id: Optional[str] = None,
         brief: Optional[str] = None,
     ) -> List[SyntheticRecord]:
-        """Generate ``count`` records for one matrix cell."""
+        """Generate ``count`` records of ``element_type``.
+
+        If ``label`` is given, all records carry it (Balance/matrix mode). If it
+        is ``None``, the model assigns the most fitting label per record from
+        ``allowed_labels`` (Describe mode)."""
         if count <= 0:
             return []
         industries = industries or taxonomy.DEFAULT_INDUSTRIES
         languages = languages or taxonomy.DEFAULT_LANGUAGES
         doc_types = doc_types or taxonomy.DEFAULT_DOC_TYPES
-        et, label = cell.element_type, cell.label
+        label_set = taxonomy.resolve_labels(allowed_labels)
+        auto_label = label is None
+        et = element_type
         required_attrs = REQUIRED_ATTRS.get(et, [])
 
         seed_block = ""
         if seeds:
             seed_block = "\n\nReal reference examples (match their tone/structure, do NOT copy):\n" + \
                 "\n".join(f"- {s[:240]}" for s in seeds[:8])
-
         brief_block = ""
         if brief and brief.strip():
-            brief_block = (
-                f"\n\nUSER BRIEF — honour every requirement below in the generated text:\n{brief.strip()}"
+            brief_block = f"\n\nUSER BRIEF — honour every requirement below in the generated text:\n{brief.strip()}"
+
+        if auto_label:
+            label_line = (
+                f"For each record choose the single most fitting label from: {label_set}. "
+                "Set the 'label' field accordingly."
             )
+            target = f"{count} {et.value} records (assign each a label)"
+        else:
+            label_line = f"Taxonomy label: {label} — {taxonomy.label_description(label) or '(project-defined category)'}\nAll records are classified as {label}."
+            target = f"{count} {et.value}/{label} records"
 
         system = (
             f"You are a senior procurement contract author generating realistic synthetic training data.\n"
             f"Element type: {et.value} — {taxonomy.ELEMENT_DESCRIPTIONS[et]}\n"
-            f"Taxonomy label: {label.value} — {taxonomy.TAXONOMY_DESCRIPTIONS[label]}\n\n"
-            f"Produce {count} DISTINCT, realistic {et.value} records classified as {label.value}.\n"
+            f"{label_line}\n\n"
+            f"Produce {count} DISTINCT, realistic {et.value} records.\n"
             f"Vary across industries {industries}, document types {[d.value for d in doc_types]}, "
             f"and languages {languages} to maximise diversity.\n"
             f"Each record MUST include these attribute keys in 'attributes': {required_attrs or '[]'}.\n"
@@ -248,9 +317,8 @@ class SyntheticDataGenerationService:
             "Set 'industry', 'doc_type', 'language' fields to reflect the variation you chose."
         )
         data = self._call(
-            system,
-            f"Generate {count} {et.value}/{label.value} records." + brief_block + seed_block,
-            _GENERATE_TOOL, "emit_records",
+            system, f"Generate {target}." + brief_block + seed_block,
+            _generate_tool(auto_label, label_set), "emit_records",
             max_tokens=min(8000, 400 + count * 220), temperature=0.85,
         )
         records: List[SyntheticRecord] = []
@@ -259,9 +327,13 @@ class SyntheticDataGenerationService:
                 dtype = DocumentType(raw.get("doc_type", doc_types[0].value))
             except ValueError:
                 dtype = doc_types[0]
+            if auto_label:
+                rlabel = raw.get("label") if raw.get("label") in label_set else label_set[0]
+            else:
+                rlabel = label
             rec = SyntheticRecord(
                 id=_new_id(et), project_id=project_id, version_id=version_id,
-                element_type=et, label=label,
+                element_type=et, label=rlabel,
                 text=str(raw.get("text", "")).strip(),
                 rationale=str(raw.get("rationale", "")).strip(),
                 industry=str(raw.get("industry") or industries[0]),
@@ -272,12 +344,13 @@ class SyntheticDataGenerationService:
                 status=RecordStatus.CANDIDATE,
                 attributes=raw.get("attributes") or {},
                 provenance={
-                    "model": self.model, "cell": cell.key,
+                    "model": self.model, "cell": f"{et.value}|{rlabel}",
+                    "mode": "describe" if auto_label else "balance",
                     "seeds_used": len(seeds or []), "generator": "emit_records",
                 },
             )
             records.append(rec)
-        logger.info("Generated %d/%d records for cell %s", len(records), count, cell.key)
+        logger.info("Generated %d/%d %s records (auto_label=%s)", len(records), count, et.value, auto_label)
         return records
 
     # ------------------------------------------------------------------
@@ -405,7 +478,7 @@ class SyntheticDataGenerationService:
             assembler = "label-grouped"
             grouped: Dict[str, List[SyntheticRecord]] = {}
             for r in records:
-                grouped.setdefault(r.label.value, []).append(r)
+                grouped.setdefault(r.label, []).append(r)
             for label, recs in grouped.items():
                 lines.append(f"## {label}")
                 member_ids = []

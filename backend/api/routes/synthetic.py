@@ -18,7 +18,7 @@ from collections import Counter
 from typing import AsyncGenerator, List, Optional
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from api.deps import (
@@ -27,7 +27,7 @@ from api.deps import (
 from core.models import DocumentType, ElementType
 from synthetic import db
 from synthetic import taxonomy
-from synthetic.models import MatrixCell, RecordStatus, SMEVerdict, TaxonomyLabel
+from synthetic.models import MatrixCell, RecordStatus, SMEVerdict, VersionImmutableError
 from synthetic.schemas import record_json_schema, relationship_json_schema
 
 logger = logging.getLogger(__name__)
@@ -49,14 +49,14 @@ async def meta() -> dict:
     from config.settings import settings
     return {
         "element_types": [e.value for e in ElementType],
-        "labels": [l.value for l in TaxonomyLabel],
+        "labels": list(taxonomy.DEFAULT_LABELS),          # default set; projects override
         "doc_types": [d.value for d in DocumentType],
         "industries": taxonomy.DEFAULT_INDUSTRIES,
         "languages": taxonomy.DEFAULT_LANGUAGES,
         "all_cells": [c.to_dict() for c in taxonomy.all_cells()],
         "recommended_cells": [c.key for c in taxonomy.recommended_cells()],
         "min_threshold": settings.synthetic_min_threshold,
-        "label_descriptions": {l.value: d for l, d in taxonomy.TAXONOMY_DESCRIPTIONS.items()},
+        "label_descriptions": dict(taxonomy.TAXONOMY_DESCRIPTIONS),
         "record_schema": record_json_schema(),
         "relationship_schema": relationship_json_schema(),
     }
@@ -71,6 +71,14 @@ class ProjectCreate(BaseModel):
     name: str
     description: str = ""
     min_threshold: Optional[int] = None
+    labels: Optional[List[str]] = None
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    min_threshold: Optional[int] = None
+    labels: Optional[List[str]] = None
 
 
 @router.get("/projects")
@@ -83,13 +91,25 @@ async def list_projects() -> dict:
 async def create_project(body: ProjectCreate) -> dict:
     if not body.name.strip():
         raise HTTPException(status_code=400, detail="Name cannot be empty")
-    p = await asyncio.to_thread(db.create_project, body.name, body.description, body.min_threshold)
+    p = await asyncio.to_thread(
+        db.create_project, body.name, body.description, body.min_threshold, body.labels,
+    )
     return p.to_dict()
 
 
 @router.get("/projects/{project_id}")
 async def get_project(project_id: str) -> dict:
     p = await asyncio.to_thread(db.get_project, project_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return p.to_dict()
+
+
+@router.patch("/projects/{project_id}")
+async def update_project(project_id: str, body: ProjectUpdate) -> dict:
+    p = await asyncio.to_thread(
+        db.update_project, project_id, body.name, body.description, body.min_threshold, body.labels,
+    )
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
     return p.to_dict()
@@ -120,9 +140,11 @@ def _build_overview(project) -> dict:
     ])
     staged_counts = Counter(r.cell.key for r in staged)
 
+    labels = project.label_set
+    recommended = {c.key for c in taxonomy.recommended_cells(labels)}
     cells = []
     under = []
-    for cell in taxonomy.all_cells():
+    for cell in taxonomy.all_cells(labels):
         s = int(seed_counts.get(cell.key, 0))
         g = int(staged_counts.get(cell.key, 0))
         total = s + g
@@ -132,17 +154,22 @@ def _build_overview(project) -> dict:
         cells.append({
             "cell": cell.key,
             "element_type": cell.element_type.value,
-            "label": cell.label.value,
+            "label": cell.label,
             "seed_count": s,
             "generated_count": g,
             "total": total,
             "deficit": deficit,
             "sufficient": deficit == 0,
-            "recommended": cell in set(taxonomy.recommended_cells()),
+            "recommended": cell in recommended,
         })
+    # AI-suggested labels not already in the project's set.
+    suggested = [l for l in seed.get("suggested_labels", []) if l not in labels]
+
     return {
         "project_id": project.id,
         "min_threshold": project.min_threshold,
+        "labels": labels,
+        "suggested_labels": suggested,
         "cells": cells,
         "under_threshold": under,
         "seed_documents": seed.get("documents", []),
@@ -176,7 +203,7 @@ async def upload_seeds(project_id: str, files: List[UploadFile] = File(...)) -> 
             parsed.append((doc, elements))
             all_elements.extend(elements)
 
-        labels = gen.classify_elements(all_elements)
+        labels = gen.classify_elements(all_elements, project.label_set)
 
         # Pooled counts + few-shot examples (used when not mirroring a doc).
         for el in all_elements:
@@ -216,7 +243,13 @@ async def upload_seeds(project_id: str, files: List[UploadFile] = File(...)) -> 
                 "sections": [{"heading": s, "cells": dict(section_cells[s])} for s in section_order],
             })
 
-        summary = {"counts": dict(counts), "examples": examples, "documents": docs_meta}
+        # AI-suggested taxonomy derived from the seed content (advisory).
+        suggested = gen.suggest_labels(all_elements, project.label_set)
+
+        summary = {
+            "counts": dict(counts), "examples": examples, "documents": docs_meta,
+            "suggested_labels": suggested,
+        }
         db.update_project_seed_summary(project_id, summary)
         return summary
 
@@ -289,7 +322,8 @@ async def generate(project_id: str, body: GenerateBody) -> StreamingResponse:
 @router.get("/projects/{project_id}/versions")
 async def list_versions(project_id: str) -> dict:
     versions = await asyncio.to_thread(db.list_versions, project_id)
-    return {"versions": [v.to_dict() for v in versions]}
+    counts = await asyncio.to_thread(db.version_status_counts, project_id)
+    return {"versions": [{**v.to_dict(), "status_counts": counts.get(v.id, {})} for v in versions]}
 
 
 @router.get("/versions/{version_id}/records")
@@ -362,6 +396,8 @@ async def sme_verdict(version_id: str, body: VerdictBody) -> dict:
             sme.submit_verdict, body.record_id, verdict, body.reviewer,
             body.corrected_label, body.corrected_text, body.comment,
         )
+    except VersionImmutableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return result
@@ -371,6 +407,25 @@ async def sme_verdict(version_id: str, body: VerdictBody) -> dict:
 async def sme_summary(version_id: str) -> dict:
     sme = get_sme_service()
     return await asyncio.to_thread(sme.summary, version_id)
+
+
+@router.get("/versions/{version_id}/sme/queue")
+async def sme_queue(version_id: str) -> dict:
+    """Full review queue: every record + its report + review status, plus the
+    IDs that make up the representative sample and the summary. The UI filters
+    client-side (unreviewed / approved / rejected / all), so reviewed records
+    stay visible instead of vanishing from a shrinking sample."""
+    sme = get_sme_service()
+    records = await asyncio.to_thread(db.list_records, version_id)
+    reports = await asyncio.to_thread(db.get_reports_for_version, version_id)
+    sample = await asyncio.to_thread(sme.sample, version_id)
+    summary = await asyncio.to_thread(sme.summary, version_id)
+    return {
+        "records": [r.to_dict() for r in records],
+        "reports": {r.id: reports.get(r.id, {}) for r in records},
+        "sample_ids": [r.id for r in sample],
+        "summary": summary,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +444,79 @@ async def promote(version_id: str) -> dict:
         return await asyncio.to_thread(ds.promote, version_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/versions/{version_id}/clone")
+async def clone(version_id: str) -> dict:
+    """Deep-copy a (frozen/main) version into a new editable staging version."""
+    ds = get_dataset_service()
+    try:
+        return await asyncio.to_thread(ds.clone_version, version_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.delete("/versions/{version_id}")
+async def delete_version(version_id: str) -> dict:
+    ds = get_dataset_service()
+    try:
+        return await asyncio.to_thread(ds.delete_version, version_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+# ── Export ──────────────────────────────────────────────────────────────────
+
+def _attach(content, filename: str, media_type: str) -> Response:
+    return Response(content=content, media_type=media_type,
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/versions/{version_id}/export/records.jsonl")
+async def export_records(version_id: str) -> Response:
+    ds = get_dataset_service()
+    data = await asyncio.to_thread(ds.export_records_jsonl, version_id)
+    return _attach(data, f"{version_id[:8]}-records.jsonl", "application/x-ndjson")
+
+
+@router.get("/versions/{version_id}/export/relationships.jsonl")
+async def export_relationships(version_id: str) -> Response:
+    ds = get_dataset_service()
+    data = await asyncio.to_thread(ds.export_relationships_jsonl, version_id)
+    return _attach(data, f"{version_id[:8]}-relationships.jsonl", "application/x-ndjson")
+
+
+@router.get("/versions/{version_id}/export/bundle.zip")
+async def export_bundle(version_id: str) -> Response:
+    ds = get_dataset_service()
+    try:
+        data = await asyncio.to_thread(ds.export_bundle_zip, version_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return _attach(data, f"{version_id[:8]}-bundle.zip", "application/zip")
+
+
+@router.get("/versions/{version_id}/documents/{doc_id}/export.md")
+async def export_doc_md(version_id: str, doc_id: str) -> Response:
+    ds = get_dataset_service()
+    try:
+        data = await asyncio.to_thread(ds.document_markdown, version_id, doc_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return _attach(data, f"{doc_id}.md", "text/markdown")
+
+
+@router.get("/versions/{version_id}/documents/{doc_id}/export.docx")
+async def export_doc_docx(version_id: str, doc_id: str) -> Response:
+    ds = get_dataset_service()
+    try:
+        data = await asyncio.to_thread(ds.document_docx, version_id, doc_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return _attach(
+        data, f"{doc_id}.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
 
 @router.post("/versions/{version_id}/publish")

@@ -49,25 +49,33 @@ The second product area (`/studio`) manufactures training-grade synthetic contra
 
 | Core service | Does |
 |--------------|------|
-| **Generation** | Generates clauses, requirements, risks, mitigations, LDs, labeled relationship/mapping examples, and whole composite documents (GPT-4o). Supports a free-text **brief** and a **mirror-a-document** mode that reproduces a specific seed doc's section layout + category composition. |
-| **Validation** | Schema Validity (Pydantic/JSON Schema) · Label Validity (approved taxonomy) · Business rules + Coverage Consistency (relationship direction/label). |
+| **Generation** | Generates clauses, requirements, risks, mitigations, LDs, labeled relationship/mapping examples, and whole composite documents (GPT-4o). Intent-led (Describe / Mirror / Balance), honours a free-text **brief**, and can **suggest a taxonomy** from your seed documents. |
+| **Validation** | Schema Validity (Pydantic/JSON Schema) · Label Validity (against the project's label set) · Business rules + Coverage Consistency (relationship direction/label). |
 | **Quality** | Duplicate detection (BGE-M3 + Qdrant cosine) · Realism (rules + LLM-as-Judge) · Diversity/Balance (distribution + normalised entropy). |
-| **Dataset Management** | Versioning, lineage, promotion (staging → main), and publication into an Analysis workspace. |
+| **Dataset Management** | Immutable versioning, clone-to-edit, delete, lineage, promotion (staging → main), non-destructive publication into an Analysis workspace, and dataset/document export. |
 
-**Categories.** Generation targets a 2-level matrix — **ElementType (5) × TaxonomyLabel (7) = 35 cells** (`Legal, Financial, Technical, KPI, Risk, Compliance, Liquidated Damages`). Each cell has a minimum-examples threshold (default 5).
+**Categories.** Element types are fixed (Requirement/Clause/Risk/Mitigation/LD — a structural contract with the graph); **taxonomy labels are per-project strings** (7 defaults — `Legal, Financial, Technical, KPI, Risk, Compliance, Liquidated Damages` — add your own like `Insurance`, `Data Privacy`). On seed analysis the AI also **suggests labels from the document content**, adoptable with one click in the Categories editor.
+
+**Generation is intent-led** — you pick a goal, not a grid:
+- **Describe** — free-text brief + element types; the model assigns each record the best-fitting label. No seeds required.
+- **Mirror a document** — reproduce a specific seed doc's section layout + category composition.
+- **Balance coverage** — fill under-threshold cells of the `element types × labels` matrix (target = min examples per cell, default 5).
 
 **Flow.**
 
 ```
-upload seeds → classify into matrix → gap-overview heatmap → pick cells + counts (or a brief / mirror a doc)
+(optional) upload seeds → AI-suggested categories + coverage
+   → choose intent: Describe · Mirror · Balance
    → generate → validate → quality → STAGING
-   → SME review (representative sample; recommended) → promote STAGING → MAIN
+   → SME review (filterable queue; recommended) → promote STAGING → MAIN (immutable)
    → publish into an Analysis workspace (feeds the existing graph pipeline)
 ```
 
-The Studio workspace has five tabs — **Generate · Validate · Quality · SME Review · Datasets**. There is a dedicated **SME Review** surface that serves a statistically representative, stratified sample for approve / reject / edit-relabel with feedback capture.
+**Versioning is atomic.** Each generation (and each **clone**) is a version. Promoting to **MAIN freezes** it (SME edits return `409`); to change it, **clone** it into a new editable staging version (records reset to unverified for a fresh review cycle). Publishing is **non-destructive and re-publishable**; versions can be **deleted** (cascades records/relationships/documents + artifacts). Every version is **exportable** — records/relationships as JSONL, each draft document as **Markdown & .docx**, or a **ZIP bundle** with a manifest.
 
-Structured metadata lives in **PostgreSQL** (`synthetic_*` tables); raw artifacts (records JSONL, rendered documents) live in **MinIO/S3** (`synthetic` bucket); duplicate-detection embeddings live in a dedicated **Qdrant** collection (`synthetic_elements`).
+The Studio workspace has five tabs — **Generate · Validate · Quality · SME Review · Datasets** — all bound to the header's current-version selector. **SME Review** is a filterable queue (Unreviewed / Approved / Rejected / All) with a highlighted representative sample; verdicts move records between buckets rather than hiding them, and the Datasets tab shows live per-version review counts.
+
+Structured metadata lives in **PostgreSQL** (`synthetic_*` tables); raw artifacts (records JSONL, rendered documents) live in **MinIO/S3** (`synthetic` bucket, filesystem fallback); duplicate-detection embeddings live in a dedicated **Qdrant** collection (`synthetic_elements`).
 
 > Full implementation reference — services, endpoints, config, and data model — is in **[TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md) §14**.
 

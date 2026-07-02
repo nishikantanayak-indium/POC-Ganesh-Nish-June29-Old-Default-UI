@@ -4,7 +4,7 @@ import type {
   Conversation, ConversationMessage,
   StudioProject, StudioMeta, StudioOverview, StudioVersion, SyntheticRecordT,
   SyntheticRelationshipT, RecordReports, SMESummary, LineageEdge, GenSelection,
-  GenKnobs, GenEvent,
+  GenKnobs, GenEvent, SyntheticDocumentT,
 } from '../types'
 
 const BASE = ''  // vite proxy forwards /api → localhost:8000
@@ -198,10 +198,22 @@ export async function fetchProjects(): Promise<StudioProject[]> {
   return (await r.json()).projects
 }
 
-export async function createProject(name: string, description = '', minThreshold?: number): Promise<StudioProject> {
+export async function createProject(
+  name: string, description = '', minThreshold?: number, labels?: string[],
+): Promise<StudioProject> {
   const r = await fetch(`${studio}/projects`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, description, min_threshold: minThreshold ?? null }),
+    body: JSON.stringify({ name, description, min_threshold: minThreshold ?? null, labels: labels ?? null }),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function updateProject(
+  id: string, patch: { name?: string; description?: string; min_threshold?: number; labels?: string[] },
+): Promise<StudioProject> {
+  const r = await fetch(`${studio}/projects/${id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
   })
   if (!r.ok) throw new Error(await r.text())
   return r.json()
@@ -280,10 +292,48 @@ export async function fetchSmeSummary(versionId: string): Promise<SMESummary> {
   return r.json()
 }
 
+export async function fetchSmeQueue(versionId: string): Promise<{
+  records: SyntheticRecordT[]
+  reports: Record<string, RecordReports>
+  sample_ids: string[]
+  summary: SMESummary
+}> {
+  const r = await fetch(`${studio}/versions/${versionId}/sme/queue`)
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function deleteVersion(versionId: string): Promise<{ deleted: boolean }> {
+  const r = await fetch(`${studio}/versions/${versionId}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
 export async function promoteVersion(versionId: string): Promise<{ version_id: string; status: string }> {
   const r = await fetch(`${studio}/versions/${versionId}/promote`, { method: 'POST' })
   if (!r.ok) throw new Error(await r.text())
   return r.json()
+}
+
+export async function cloneVersion(versionId: string): Promise<{ version_id: string; version_no: number; cloned_from: string }> {
+  const r = await fetch(`${studio}/versions/${versionId}/clone`, { method: 'POST' })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function fetchVersionDocuments(versionId: string): Promise<SyntheticDocumentT[]> {
+  const r = await fetch(`${studio}/versions/${versionId}/documents`)
+  if (!r.ok) throw new Error(await r.text())
+  return (await r.json()).documents
+}
+
+// Download URLs (used as <a href> so the browser handles the file save).
+export const exportUrls = {
+  records: (v: string) => `${studio}/versions/${v}/export/records.jsonl`,
+  relationships: (v: string) => `${studio}/versions/${v}/export/relationships.jsonl`,
+  bundle: (v: string) => `${studio}/versions/${v}/export/bundle.zip`,
+  docMd: (v: string, d: string) => `${studio}/versions/${v}/documents/${d}/export.md`,
+  docDocx: (v: string, d: string) => `${studio}/versions/${v}/documents/${d}/export.docx`,
 }
 
 export async function publishVersion(versionId: string, workspaceId: string): Promise<Record<string, unknown>> {

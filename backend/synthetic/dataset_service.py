@@ -18,26 +18,34 @@ testable and easy to evolve.
 """
 from __future__ import annotations
 
+import io
 import json
 import logging
+import uuid
+import zipfile
+from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional
 
 from core.models import (
     AtomicElement,
     DocumentType,
+    ElementType,
     ParsedDocument,
     Relationship,
 )
 
 from . import db
-from .generation_service import SyntheticDataGenerationService
+from .generation_service import SyntheticDataGenerationService, _new_id
 from .models import (
     DatasetStatus,
     MatrixCell,
+    QualityReport,
     RecordStatus,
     SyntheticDocument,
     SyntheticRecord,
     SyntheticRelationship,
+    ValidationReport,
 )
 from .quality_service import SyntheticDataQualityAssessmentService
 from .storage import get_artifact_store
@@ -116,30 +124,40 @@ class SyntheticDatasetManagementService:
         progress_cb({"stage": "start", "message": f"Version v{version.version_no} created",
                      "version_id": version.id})
 
+        labels = project.label_set
         all_records: List[SyntheticRecord] = []
         all_reports = []  # ValidationReport
         total_target = sum(int(s["count"]) for s in selections)
         done = 0
 
-        # ── generate + validate (+ bounded regeneration) per cell ────────
+        # ── generate + validate (+ bounded regeneration) per selection ────
+        # A selection is either cell-based {"cell": "Type|Label"} (Balance mode,
+        # fixed label) or type-only {"element_type": "Clause"} (Describe mode,
+        # the model assigns the best label per record).
         for sel in selections:
-            cell = MatrixCell.from_key(sel["cell"])
             count = int(sel["count"])
             if count <= 0:
                 continue
-            progress_cb({"stage": "generate", "message": f"Generating {count}× {cell.key}",
-                         "current": done, "total": total_target, "cell": cell.key})
+            if sel.get("cell"):
+                cell = MatrixCell.from_key(sel["cell"])
+                et, fixed_label, seeds, tag = cell.element_type, cell.label, seed_examples.get(cell.key), cell.key
+            else:
+                et = ElementType(sel["element_type"])
+                fixed_label, seeds, tag = None, None, f"{et.value}|auto"
+
+            progress_cb({"stage": "generate", "message": f"Generating {count}× {tag}",
+                         "current": done, "total": total_target, "cell": tag})
 
             passing: List[SyntheticRecord] = []
             attempts = 0
             need = count
             while need > 0 and attempts <= max_regen:
                 batch = self.gen.generate_records(
-                    project_id, cell, need, seeds=seed_examples.get(cell.key),
+                    project_id, et, need, label=fixed_label, allowed_labels=labels, seeds=seeds,
                     industries=industries, languages=languages, doc_types=doc_types,
                     version_id=version.id, brief=brief,
                 )
-                reports = self.val.validate_records(batch)
+                reports = self.val.validate_records(batch, allowed_labels=labels)
                 rep_by_id = {r.record_id: r for r in reports}
                 for rec in batch:
                     rep = rep_by_id[rec.id]
@@ -154,13 +172,13 @@ class SyntheticDatasetManagementService:
                 attempts += 1
                 if need > 0 and attempts <= max_regen:
                     progress_cb({"stage": "validate",
-                                 "message": f"{cell.key}: {need} failed validation — regenerating (attempt {attempts})",
-                                 "current": done, "total": total_target, "cell": cell.key})
+                                 "message": f"{tag}: {need} failed validation — regenerating (attempt {attempts})",
+                                 "current": done, "total": total_target, "cell": tag})
 
             all_records.extend(passing)
             done += count
-            progress_cb({"stage": "validate", "message": f"{cell.key}: {len(passing)} valid",
-                         "current": done, "total": total_target, "cell": cell.key})
+            progress_cb({"stage": "validate", "message": f"{tag}: {len(passing)} valid",
+                         "current": done, "total": total_target, "cell": tag})
 
         valid_records = [r for r in all_records if r.status != RecordStatus.REJECTED]
 
@@ -214,6 +232,7 @@ class SyntheticDatasetManagementService:
                 )
                 key = self._doc_key(project_id, dataset.id, version.version_no, doc.id)
                 doc.artifact_uri = self.store.put_text(key, markdown, "text/markdown")
+                doc.provenance["artifact_key"] = key
                 documents.append(doc)
             else:
                 progress_cb({"stage": "assemble", "message": "Assembling composite documents"})
@@ -226,6 +245,7 @@ class SyntheticDatasetManagementService:
                     )
                     key = self._doc_key(project_id, dataset.id, version.version_no, doc.id)
                     doc.artifact_uri = self.store.put_text(key, markdown, "text/markdown")
+                    doc.provenance["artifact_key"] = key
                     documents.append(doc)
 
         # ── persist everything ───────────────────────────────────────────
@@ -273,6 +293,135 @@ class SyntheticDatasetManagementService:
         ])
         return {"version_id": version_id, "status": DatasetStatus.MAIN.value}
 
+    def delete_version(self, version_id: str) -> dict:
+        """Delete a version and its artifacts. Records/rels/docs/reports cascade
+        in Postgres; the object-store snapshot + rendered docs are removed too.
+        (Any already-published Analysis graph is a separate copy and is untouched.)"""
+        version = db.get_version(version_id)
+        if version is None:
+            raise ValueError(f"version {version_id} not found")
+        try:
+            self.store.delete_prefix(f"{version.project_id}/{version.dataset_id}/v{version.version_no}")
+        except Exception as exc:
+            logger.warning("delete_version: artifact cleanup failed for %s: %s", version_id, exc)
+        deleted = db.delete_version(version_id)
+        return {"deleted": deleted, "version_id": version_id}
+
+    # ==================================================================
+    # Clone — atomic copy of a (frozen) version into a new editable staging one
+    # ==================================================================
+
+    def clone_version(self, version_id: str) -> dict:
+        """
+        Deep-copy a version into a NEW staging version with fresh record IDs.
+
+        Used to edit a frozen (main) version: the original stays an immutable
+        snapshot; edits happen on the clone, which can then be re-promoted.
+        Records, relationships, documents, and their validation/quality reports
+        are copied and re-linked; artifacts are duplicated in the store.
+        """
+        src = db.get_version(version_id)
+        if src is None:
+            raise ValueError(f"version {version_id} not found")
+        project = db.get_project(src.project_id)
+        thr = project.min_threshold if project else 5
+
+        new = db.create_version(src.project_id, src.dataset_id, note=f"clone of v{src.version_no}")
+
+        # 1 · records (new IDs). Carry forward the ACCEPTED content
+        # (staged + SME-approved) and RESET it to unverified, so the clone is a
+        # fresh review cycle — SME/Quality/Validate all reflect an un-reviewed set.
+        # Rejected / duplicate / SME-rejected records are left behind (the original
+        # frozen version still retains them).
+        records = [
+            r for r in db.list_records(version_id)
+            if r.status in (RecordStatus.STAGED, RecordStatus.SME_APPROVED)
+        ]
+        id_map: Dict[str, str] = {}
+        new_records: List[SyntheticRecord] = []
+        for r in records:
+            nid = _new_id(r.element_type)
+            id_map[r.id] = nid
+            new_records.append(replace(
+                r, id=nid, version_id=new.id, status=RecordStatus.STAGED, embedding_id=None,
+                provenance={**r.provenance, "cloned_from": r.id},
+            ))
+        db.insert_records(new_records)
+
+        # 2 · reports (remapped record IDs)
+        reports = db.get_reports_for_version(version_id)
+        val_reports: List[ValidationReport] = []
+        qual_reports: List[QualityReport] = []
+        for old_id, rep in reports.items():
+            nid = id_map.get(old_id)
+            if not nid:
+                continue
+            v = rep.get("validation")
+            if v:
+                val_reports.append(ValidationReport(
+                    record_id=nid, schema_ok=v["schema_ok"], label_ok=v["label_ok"],
+                    rules_ok=v["rules_ok"], reasons=v.get("reasons") or [],
+                ))
+            q = rep.get("quality")
+            if q:
+                qual_reports.append(QualityReport(
+                    record_id=nid, realism=q["realism"], is_duplicate=q["is_duplicate"],
+                    duplicate_of=id_map.get(q.get("duplicate_of")) if q.get("duplicate_of") else None,
+                    near_dup_score=q.get("near_dup_score", 0.0), realism_notes=q.get("realism_notes", ""),
+                ))
+        db.upsert_validation_reports(val_reports)
+        db.upsert_quality_reports(qual_reports)
+
+        # 3 · relationships (remapped endpoints)
+        new_rels: List[SyntheticRelationship] = []
+        for rel in db.list_relationships(version_id):
+            s, t = id_map.get(rel.source_record_id), id_map.get(rel.target_record_id)
+            if not s or not t:
+                continue
+            new_rels.append(replace(
+                rel, id=f"SREL_{uuid.uuid4().hex[:8].upper()}", version_id=new.id,
+                source_record_id=s, target_record_id=t,
+            ))
+        db.insert_relationships(new_rels)
+
+        # 4 · documents (remapped members + duplicated artifact)
+        for d in db.list_documents(version_id):
+            members = [id_map[x] for x in d.member_record_ids if x in id_map]
+            sections = [
+                {"heading": s.get("heading", ""),
+                 "record_ids": [id_map[x] for x in s.get("record_ids", []) if x in id_map]}
+                for s in d.sections
+            ]
+            ndoc = SyntheticDocument(
+                id=f"SDOC_{uuid.uuid4().hex[:8].upper()}", project_id=d.project_id,
+                version_id=new.id, doc_type=d.doc_type, title=d.title,
+                member_record_ids=members, sections=sections, status=RecordStatus.STAGED,
+                provenance={**d.provenance, "cloned_from": d.id},
+            )
+            try:
+                src_key = d.provenance.get("artifact_key")
+                if src_key and self.store.exists(src_key):
+                    data = self.store.get_bytes(src_key)
+                    nkey = self._doc_key(d.project_id, new.dataset_id, new.version_no, ndoc.id)
+                    ndoc.artifact_uri = self.store.put_bytes(nkey, data, "text/markdown")
+                    ndoc.provenance["artifact_key"] = nkey
+            except Exception as exc:
+                logger.warning("clone: artifact copy failed for %s: %s", d.id, exc)
+            db.insert_document(ndoc)
+
+        # 5 · stats + snapshot + lineage
+        staged = [r for r in new_records if r.status in (RecordStatus.STAGED, RecordStatus.SME_APPROVED)]
+        distribution = self.qual.compute_distribution(staged, new_rels, thr)
+        artifact_uri = self._snapshot(src.project_id, new.dataset_id, new.version_no, staged, new_rels)
+        stats = {
+            "cloned_from": version_id, "cloned_from_version_no": src.version_no,
+            "staged": len(staged), "relationships": len(new_rels),
+            "documents": len(db.list_documents(new.id)), "distribution": distribution,
+        }
+        db.update_version_stats(new.id, stats, artifact_uri)
+        db.add_lineage_edges(src.project_id, [(f"version:{version_id}", f"version:{new.id}", "cloned")])
+        return {"version_id": new.id, "version_no": new.version_no, "cloned_from": version_id}
+
     def publish_to_analysis(
         self, version_id: str, workspace_id: str, progress_cb: ProgressCB = _noop,
     ) -> dict:
@@ -311,9 +460,9 @@ class SyntheticDatasetManagementService:
             for r in recs:
                 el = AtomicElement(
                     id=r.id, type=r.element_type, text=r.text,
-                    source=f"Synthetic {dtype.value} — {r.label.value}",
+                    source=f"Synthetic {dtype.value} — {r.label}",
                     document_id=doc_id, confidence=1.0,
-                    metadata={"section": r.label.value, "page_number": 1, "synthetic": True},
+                    metadata={"section": r.label, "page_number": 1, "synthetic": True},
                 )
                 elements.append(el)
 
@@ -334,18 +483,28 @@ class SyntheticDatasetManagementService:
         doc_hashes = {d.id: f"synthetic-{version_id}-{d.id}" for d in documents}
         gs.build_knowledge_graph(documents, elements, relationships, doc_hashes)
 
-        for r in records:
-            db.update_record_content(r.id, status=RecordStatus.PUBLISHED)
-        db.add_lineage_edges(version.project_id, [
-            (f"version:{version_id}", f"workspace:{workspace_id}", "published"),
-        ])
-
+        # Publication is NON-destructive: record statuses are left intact so the
+        # version stays a reproducible snapshot and can be re-published (to the
+        # same or another workspace). Publications are tracked on the version.
         summary = {
             "version_id": version_id, "workspace_id": workspace_id,
             "documents": len(documents), "elements": len(elements),
             "relationships": len(relationships),
             "nodes": gs.get_node_count(), "edges": gs.get_edge_count(),
         }
+        stats = version.stats or {}
+        pubs = list(stats.get("published_to", []))
+        pubs.append({
+            "workspace_id": workspace_id,
+            "elements": len(elements), "relationships": len(relationships),
+            "at": datetime.now(timezone.utc).isoformat(),
+        })
+        stats["published_to"] = pubs
+        db.update_version_stats(version_id, stats)
+        db.add_lineage_edges(version.project_id, [
+            (f"version:{version_id}", f"workspace:{workspace_id}", "published"),
+        ])
+
         progress_cb({"stage": "complete", "message": "Published to Analysis", "summary": summary})
         return summary
 
@@ -355,6 +514,91 @@ class SyntheticDatasetManagementService:
 
     def lineage(self, project_id: str) -> dict:
         return {"project_id": project_id, "edges": db.list_lineage(project_id)}
+
+    # ==================================================================
+    # Export — datasets + draft documents
+    # ==================================================================
+
+    def export_records_jsonl(self, version_id: str) -> str:
+        """Authoritative records export, regenerated from the DB (reflects edits)."""
+        recs = db.list_records(version_id)
+        return "\n".join(json.dumps(r.to_dict(), ensure_ascii=False) for r in recs)
+
+    def export_relationships_jsonl(self, version_id: str) -> str:
+        rels = db.list_relationships(version_id)
+        return "\n".join(json.dumps(r.to_dict(), ensure_ascii=False) for r in rels)
+
+    def _find_document(self, version_id: str, doc_id: str) -> SyntheticDocument:
+        for d in db.list_documents(version_id):
+            if d.id == doc_id:
+                return d
+        raise ValueError(f"document {doc_id} not found in version {version_id}")
+
+    def document_markdown(self, version_id: str, doc_id: str) -> str:
+        """Return the draft document's Markdown — from the stored artifact, or
+        regenerated from its sections if the artifact is unavailable."""
+        doc = self._find_document(version_id, doc_id)
+        key = doc.provenance.get("artifact_key")
+        if key:
+            try:
+                if self.store.exists(key):
+                    return self.store.get_bytes(key).decode("utf-8")
+            except Exception as exc:
+                logger.warning("export md: artifact read failed (%s) — regenerating", exc)
+        # Fallback: rebuild from sections + record texts.
+        texts = {r.id: r.text for r in db.list_records(version_id)}
+        lines = [f"# {doc.title}", ""]
+        for s in doc.sections:
+            lines.append(f"## {s.get('heading', 'Section')}")
+            for i, rid in enumerate(s.get("record_ids", []), 1):
+                if rid in texts:
+                    lines.append(f"{i}. {texts[rid]}")
+            lines.append("")
+        return "\n".join(lines)
+
+    def document_docx(self, version_id: str, doc_id: str) -> bytes:
+        """Render the draft document as a Word .docx."""
+        from docx import Document as Docx  # python-docx (already a dependency)
+        doc = self._find_document(version_id, doc_id)
+        texts = {r.id: r.text for r in db.list_records(version_id)}
+        d = Docx()
+        d.add_heading(doc.title, level=0)
+        if doc.provenance.get("brief"):
+            d.add_paragraph("Generated to a user brief.").italic = True
+        for s in doc.sections:
+            d.add_heading(s.get("heading", "Section"), level=1)
+            for rid in s.get("record_ids", []):
+                if rid in texts:
+                    d.add_paragraph(texts[rid], style="List Number")
+        buf = io.BytesIO()
+        d.save(buf)
+        return buf.getvalue()
+
+    def export_bundle_zip(self, version_id: str) -> bytes:
+        """A single ZIP: records + relationships JSONL, every draft doc (.md),
+        and a manifest.json (version stats + project + lineage)."""
+        version = db.get_version(version_id)
+        if version is None:
+            raise ValueError(f"version {version_id} not found")
+        project = db.get_project(version.project_id)
+        docs = db.list_documents(version_id)
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("records.jsonl", self.export_records_jsonl(version_id))
+            z.writestr("relationships.jsonl", self.export_relationships_jsonl(version_id))
+            for d in docs:
+                safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in d.title)[:60] or d.id
+                z.writestr(f"docs/{safe}.md", self.document_markdown(version_id, d.id))
+            manifest = {
+                "version": version.to_dict(),
+                "project": project.to_dict() if project else None,
+                "record_count": len(db.list_records(version_id)),
+                "document_count": len(docs),
+                "lineage": db.list_lineage(version.project_id),
+            }
+            z.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        return buf.getvalue()
 
     def _snapshot(
         self, project_id: str, dataset_id: str, version_no: int,
@@ -376,5 +620,6 @@ class SyntheticDatasetManagementService:
     ) -> None:
         edges = [(f"project:{project_id}", f"version:{version_id}", "generated")]
         for sel in selections:
-            edges.append((f"version:{version_id}", f"cell:{sel['cell']}", "targets"))
+            target = sel.get("cell") or sel.get("element_type") or "records"
+            edges.append((f"version:{version_id}", f"target:{target}", "targets"))
         db.add_lineage_edges(project_id, edges)

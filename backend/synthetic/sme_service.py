@@ -17,7 +17,9 @@ from collections import Counter, defaultdict
 from typing import Dict, List, Optional
 
 from . import db
-from .models import RecordStatus, SMEVerdict, SyntheticRecord, TaxonomyLabel
+from .models import (
+    DatasetStatus, RecordStatus, SMEVerdict, SyntheticRecord, VersionImmutableError,
+)
 
 
 class SMEReviewService:
@@ -45,6 +47,14 @@ class SMEReviewService:
         if rec is None:
             raise ValueError(f"record {record_id} not found")
 
+        # Main versions are immutable — reviews/edits are only allowed on staging.
+        if rec.version_id:
+            version = db.get_version(rec.version_id)
+            if version and version.status == DatasetStatus.MAIN.value:
+                raise VersionImmutableError(
+                    "version is promoted to main and is immutable — clone it to make changes"
+                )
+
         db.add_sme_review(
             record_id, verdict, reviewer=reviewer,
             corrected_label=corrected_label, corrected_text=corrected_text, comment=comment,
@@ -55,16 +65,10 @@ class SMEReviewService:
         elif verdict == SMEVerdict.REJECT:
             db.update_record_content(record_id, status=RecordStatus.SME_REJECTED)
         elif verdict == SMEVerdict.EDIT:
-            new_label = None
-            if corrected_label:
-                try:
-                    new_label = TaxonomyLabel(corrected_label)
-                except ValueError:
-                    new_label = None
             db.update_record_content(
                 record_id,
                 text=corrected_text if corrected_text else None,
-                label=new_label,
+                label=corrected_label if corrected_label else None,
                 status=RecordStatus.SME_APPROVED,  # an edited record is an accepted record
             )
         return {"record_id": record_id, "verdict": verdict.value}

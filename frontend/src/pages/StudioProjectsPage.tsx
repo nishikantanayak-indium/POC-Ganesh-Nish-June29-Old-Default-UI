@@ -6,6 +6,7 @@ import clsx from 'clsx'
 import { fetchProjects, createProject, deleteProject } from '../api/client'
 import type { StudioProject } from '../types'
 import ThemeToggle from '../components/ThemeToggle'
+import { ToastContainer, useToast } from '../components/Toast'
 
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime()
@@ -133,6 +134,7 @@ export default function StudioProjectsPage() {
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
   const [error, setError] = useState('')
+  const { toasts, addToast, removeToast } = useToast()
 
   const load = useCallback(async () => {
     try { setProjects(await fetchProjects()) }
@@ -147,8 +149,14 @@ export default function StudioProjectsPage() {
     navigate(`/studio/project/${p.id}`)
   }
   const handleDelete = async (id: string) => {
-    try { await deleteProject(id); setProjects(prev => prev.filter(p => p.id !== id)) }
-    catch (err: unknown) { setError(err instanceof Error ? err.message : 'Delete failed') }
+    const name = projects.find(p => p.id === id)?.name ?? 'Project'
+    try {
+      await deleteProject(id)
+      setProjects(prev => prev.filter(p => p.id !== id))
+      addToast(`Deleted “${name}”`, 'success')
+    } catch (err: unknown) {
+      addToast(err instanceof Error ? err.message : 'Delete failed', 'error')
+    }
   }
 
   return (
@@ -243,6 +251,8 @@ export default function StudioProjectsPage() {
       <AnimatePresence>
         {showCreate && <CreateModal onClose={() => setShowCreate(false)} onCreate={handleCreate} />}
       </AnimatePresence>
+
+      <ToastContainer toasts={toasts} onDismiss={removeToast} />
     </div>
   )
 }

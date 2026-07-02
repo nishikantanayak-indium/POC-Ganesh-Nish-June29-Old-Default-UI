@@ -14,8 +14,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from core.models import CoverageStatus, DocumentType, ElementType, RelationshipType
 
-from .models import TaxonomyLabel
-
 # Type-specific attribute keys each element type must carry. Keeping these
 # here (not in the service) means adding a required field is a one-line change.
 REQUIRED_ATTRS: Dict[ElementType, List[str]] = {
@@ -33,7 +31,7 @@ class RecordPayload(BaseModel):
     model_config = ConfigDict(extra="ignore", use_enum_values=False)
 
     element_type: ElementType
-    label: TaxonomyLabel
+    label: str = Field(min_length=1, description="Taxonomy label (validated against the project's label set).")
     text: str = Field(min_length=15, description="The natural-language artifact text.")
     rationale: str = Field(default="", description="Why this is a realistic example.")
     industry: str = Field(default="General", min_length=1)

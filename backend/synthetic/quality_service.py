@@ -191,7 +191,7 @@ class SyntheticDataQualityAssessmentService:
         out: Dict[str, dict] = {}
         for i in range(0, len(records), 25):
             batch = records[i:i + 25]
-            listing = "\n".join(f"{r.id} [{r.element_type.value}/{r.label.value}]: {r.text[:220]}" for r in batch)
+            listing = "\n".join(f"{r.id} [{r.element_type.value}/{r.label}]: {r.text[:220]}" for r in batch)
             system = (
                 "You are a procurement/legal SME acting as a realism judge. For each record, "
                 "score 0-1 how closely it resembles a real-world contract artifact and follows "
@@ -228,7 +228,7 @@ class SyntheticDataQualityAssessmentService:
         thr = min_threshold if min_threshold is not None else settings.synthetic_min_threshold
 
         by_cell = Counter(r.cell.key for r in records)
-        by_label = Counter(r.label.value for r in records)
+        by_label = Counter(r.label for r in records)
         by_type = Counter(r.element_type.value for r in records)
         by_doc = Counter(r.doc_type.value for r in records)
         by_industry = Counter(r.industry for r in records)

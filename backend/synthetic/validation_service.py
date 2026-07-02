@@ -30,7 +30,7 @@ class SyntheticDataValidationService:
     def _record_payload(self, rec: SyntheticRecord) -> dict:
         return {
             "element_type": rec.element_type.value,
-            "label": rec.label.value,
+            "label": rec.label,
             "text": rec.text,
             "rationale": rec.rationale,
             "industry": rec.industry,
@@ -41,17 +41,19 @@ class SyntheticDataValidationService:
             "attributes": rec.attributes,
         }
 
-    def validate_record(self, rec: SyntheticRecord) -> ValidationReport:
+    def validate_record(
+        self, rec: SyntheticRecord, allowed_labels: Optional[List[str]] = None,
+    ) -> ValidationReport:
         reasons: List[str] = []
 
         # 1 · Schema Validity
         schema_ok, schema_errs = validate_record_payload(self._record_payload(rec))
         reasons += [f"schema: {e}" for e in schema_errs]
 
-        # 2 · Label Validity
-        label_ok = taxonomy.is_valid_label(rec.label.value) and taxonomy.is_valid_cell(rec.cell)
-        if not taxonomy.is_valid_label(rec.label.value):
-            reasons.append(f"label: '{rec.label}' not in approved taxonomy")
+        # 2 · Label Validity — against the project's label set
+        label_ok = taxonomy.is_valid_label(rec.label, allowed_labels)
+        if not label_ok:
+            reasons.append(f"label: '{rec.label}' not in the project's taxonomy")
 
         # 3 · Business rules
         rule_reasons = self._record_rules(rec)
@@ -75,8 +77,10 @@ class SyntheticDataValidationService:
             out.append(f"{rec.element_type.value} record must set a risk_category")
         return out
 
-    def validate_records(self, records: List[SyntheticRecord]) -> List[ValidationReport]:
-        return [self.validate_record(r) for r in records]
+    def validate_records(
+        self, records: List[SyntheticRecord], allowed_labels: Optional[List[str]] = None,
+    ) -> List[ValidationReport]:
+        return [self.validate_record(r, allowed_labels) for r in records]
 
     # ------------------------------------------------------------------
     # Coverage consistency for relationship examples
