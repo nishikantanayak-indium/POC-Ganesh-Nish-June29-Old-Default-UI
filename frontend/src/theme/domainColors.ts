@@ -27,9 +27,13 @@ export function typeColor(type: string | undefined): string {
   return TYPE_COLOR[type ?? ''] ?? TYPE_COLOR.Document
 }
 
-/** A tinted background derived from a type's color, blended onto the card surface. */
-export function typeTint(type: string | undefined, amount = 22): string {
-  return `color-mix(in srgb, ${typeColor(type)} ${amount}%, var(--card))`
+/**
+ * A saturated background derived from a type's color, blended onto the darker
+ * page background (not --card) — blending onto --card (a lighter neutral)
+ * reads as a pale wash no matter the percentage; --bg gives real depth.
+ */
+export function typeTint(type: string | undefined, amount = 40): string {
+  return `color-mix(in srgb, ${typeColor(type)} ${amount}%, var(--bg))`
 }
 
 const TYPE_INK: Record<string, string> = {
