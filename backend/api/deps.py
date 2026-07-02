@@ -68,6 +68,59 @@ def get_qa_service(workspace_id: str) -> QAService:
     return QAService(gs.store, gs.builder, gs.vector_store, workspace_id)
 
 
+# ---------------------------------------------------------------------------
+# Synthetic Data Studio services (module-level singletons)
+# ---------------------------------------------------------------------------
+
+_gen_service = None
+_val_service = None
+_qual_service = None
+_dataset_service = None
+_sme_service = None
+
+
+def get_generation_service():
+    global _gen_service
+    if _gen_service is None:
+        from synthetic.generation_service import SyntheticDataGenerationService
+        _gen_service = SyntheticDataGenerationService()
+    return _gen_service
+
+
+def get_validation_service():
+    global _val_service
+    if _val_service is None:
+        from synthetic.validation_service import SyntheticDataValidationService
+        _val_service = SyntheticDataValidationService()
+    return _val_service
+
+
+def get_quality_service():
+    global _qual_service
+    if _qual_service is None:
+        from synthetic.quality_service import SyntheticDataQualityAssessmentService
+        _qual_service = SyntheticDataQualityAssessmentService(embedder=_get_embedder())
+    return _qual_service
+
+
+def get_dataset_service():
+    global _dataset_service
+    if _dataset_service is None:
+        from synthetic.dataset_service import SyntheticDatasetManagementService
+        _dataset_service = SyntheticDatasetManagementService(
+            get_generation_service(), get_validation_service(), get_quality_service(),
+        )
+    return _dataset_service
+
+
+def get_sme_service():
+    global _sme_service
+    if _sme_service is None:
+        from synthetic.sme_service import SMEReviewService
+        _sme_service = SMEReviewService()
+    return _sme_service
+
+
 def evict_workspace(workspace_id: str) -> None:
     """Remove cached service instances for a deleted workspace."""
     _graph_services.pop(workspace_id, None)

@@ -80,6 +80,57 @@ class Settings:
         default_factory=lambda: float(os.environ.get("CONFIDENCE_THRESHOLD", "0.5"))
     )
 
+    # --- Synthetic Data Studio ---
+    # Artifact storage backend: "s3" (MinIO/S3) or "local" (filesystem fallback).
+    synthetic_storage_backend: str = field(
+        default_factory=lambda: os.environ.get("SYNTHETIC_STORAGE_BACKEND", "s3")
+    )
+    synthetic_local_root: str = field(
+        default_factory=lambda: os.environ.get(
+            "SYNTHETIC_LOCAL_ROOT",
+            str(Path(__file__).resolve().parent.parent.parent / "storage" / "synthetic"),
+        )
+    )
+    # S3 / MinIO
+    s3_endpoint_url: str = field(
+        default_factory=lambda: os.environ.get("S3_ENDPOINT_URL", "http://localhost:9000")
+    )
+    s3_bucket: str = field(
+        default_factory=lambda: os.environ.get("S3_BUCKET", "synthetic")
+    )
+    s3_access_key: str = field(
+        default_factory=lambda: os.environ.get("S3_ACCESS_KEY", "minioadmin")
+    )
+    s3_secret_key: str = field(
+        default_factory=lambda: os.environ.get("S3_SECRET_KEY", "minioadmin")
+    )
+    s3_region: str = field(
+        default_factory=lambda: os.environ.get("S3_REGION", "us-east-1")
+    )
+    # Qdrant collection dedicated to synthetic-record duplicate detection
+    synthetic_qdrant_collection: str = field(
+        default_factory=lambda: os.environ.get("SYNTHETIC_QDRANT_COLLECTION", "synthetic_elements")
+    )
+    # Minimum examples required per matrix cell before a cell is "sufficient"
+    synthetic_min_threshold: int = field(
+        default_factory=lambda: int(os.environ.get("SYNTHETIC_MIN_THRESHOLD", "5"))
+    )
+    # Duplicate-detection cosine-similarity thresholds
+    synthetic_dup_exact: float = field(
+        default_factory=lambda: float(os.environ.get("SYNTHETIC_DUP_EXACT", "0.97"))
+    )
+    synthetic_dup_near: float = field(
+        default_factory=lambda: float(os.environ.get("SYNTHETIC_DUP_NEAR", "0.90"))
+    )
+    # Realism score below this (0-1) flags a record for regeneration
+    synthetic_realism_floor: float = field(
+        default_factory=lambda: float(os.environ.get("SYNTHETIC_REALISM_FLOOR", "0.6"))
+    )
+    # Max regeneration attempts per requested record during a generate run
+    synthetic_max_regen: int = field(
+        default_factory=lambda: int(os.environ.get("SYNTHETIC_MAX_REGEN", "2"))
+    )
+
     # --- Logging ---
     log_level: str = field(
         default_factory=lambda: os.environ.get("LOG_LEVEL", "INFO")

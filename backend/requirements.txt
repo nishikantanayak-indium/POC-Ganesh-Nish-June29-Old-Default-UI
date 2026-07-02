@@ -29,6 +29,12 @@ graphiti-core>=0.3.0
 pyvis>=0.3.2
 networkx>=3.3
 
+# ── Object store — MinIO / S3 (Synthetic Data Studio artifacts) ──────────────
+boto3>=1.34.0
+
+# ── Schema validation (Synthetic Data Studio) ────────────────────────────────
+pydantic>=2.5.0          # also a FastAPI dependency; pinned explicitly for schemas
+
 # ── Utilities ────────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0
 pandas>=2.2.0

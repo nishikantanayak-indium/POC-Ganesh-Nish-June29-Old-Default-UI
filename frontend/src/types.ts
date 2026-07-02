@@ -213,3 +213,189 @@ export interface AppStatus {
   edges: number
   type_counts: Record<string, number>
 }
+
+// ── Synthetic Data Studio ─────────────────────────────────────────────────────
+
+export interface StudioProject {
+  id: string
+  name: string
+  description: string
+  min_threshold: number
+  seed_summary?: { counts?: Record<string, number>; documents?: unknown[] } | null
+  created_at: string
+  updated_at: string
+}
+
+export interface MatrixCellInfo {
+  cell: string
+  element_type: string
+  label: string
+  seed_count: number
+  generated_count: number
+  total: number
+  deficit: number
+  sufficient: boolean
+  recommended: boolean
+}
+
+export interface SeedDocument {
+  id?: string
+  name: string
+  type?: string
+  elements: number
+  error?: string
+  cells?: Record<string, number>
+  sections?: { heading: string; cells: Record<string, number> }[]
+}
+
+export interface StudioOverview {
+  project_id: string
+  min_threshold: number
+  cells: MatrixCellInfo[]
+  under_threshold: string[]
+  seed_documents: SeedDocument[]
+}
+
+export interface StudioMeta {
+  element_types: string[]
+  labels: string[]
+  doc_types: string[]
+  industries: string[]
+  languages: string[]
+  all_cells: { element_type: string; label: string; key: string }[]
+  recommended_cells: string[]
+  min_threshold: number
+  label_descriptions: Record<string, string>
+  record_schema: unknown
+  relationship_schema: unknown
+}
+
+export interface GenSelection { cell: string; count: number }
+
+export interface GenKnobs {
+  industries?: string[]
+  languages?: string[]
+  doc_types?: string[]
+  generate_relationships?: boolean
+  assemble_documents?: boolean
+  note?: string
+  brief?: string
+  mirror_document_id?: string
+}
+
+export interface SyntheticRecordT {
+  id: string
+  project_id: string
+  version_id: string | null
+  element_type: string
+  label: string
+  cell: string
+  text: string
+  rationale: string
+  industry: string
+  doc_type: string
+  language: string
+  risk_category: string | null
+  clause_structure: string | null
+  status: string
+  attributes: Record<string, unknown>
+  provenance: Record<string, unknown>
+  created_at: string | null
+}
+
+export interface SyntheticRelationshipT {
+  id: string
+  source_record_id: string
+  target_record_id: string
+  rel_type: string
+  coverage_label: string | null
+  is_positive: boolean
+  rationale: string
+  status: string
+}
+
+export interface ValidationReportT {
+  record_id: string
+  schema_ok: boolean
+  label_ok: boolean
+  rules_ok: boolean
+  reasons: string[]
+}
+
+export interface QualityReportT {
+  record_id: string
+  realism: number
+  is_duplicate: boolean
+  duplicate_of: string | null
+  near_dup_score: number
+  realism_notes: string
+}
+
+export interface RecordReports {
+  validation?: ValidationReportT
+  quality?: QualityReportT
+}
+
+export interface DistributionStats {
+  total: number
+  diversity_score: number
+  balance_score: number
+  by_cell: Record<string, number>
+  by_label: Record<string, number>
+  by_element_type: Record<string, number>
+  by_doc_type: Record<string, number>
+  by_industry: Record<string, number>
+  by_language: Record<string, number>
+  under_represented: string[]
+  over_represented: string[]
+  relationships?: { by_type?: Record<string, number>; positive?: number; negative?: number }
+}
+
+export interface VersionStats {
+  requested: number
+  generated: number
+  staged: number
+  rejected: number
+  duplicates: number
+  relationships: number
+  documents: number
+  distribution: DistributionStats
+}
+
+export interface StudioVersion {
+  id: string
+  dataset_id: string
+  project_id: string
+  version_no: number
+  status: 'staging' | 'main'
+  note: string
+  artifact_uri: string
+  stats: VersionStats | null
+  created_at: string
+}
+
+export interface SMESummary {
+  version_id: string
+  reviewable: number
+  reviewed: number
+  by_verdict: Record<string, number>
+  approval_rate: number
+  feedback: { record_id: string; verdict: string; comment: string }[]
+  complete: boolean
+}
+
+export type GenStage =
+  | 'queued' | 'start' | 'generate' | 'validate' | 'quality'
+  | 'relate' | 'assemble' | 'persist' | 'complete' | 'done' | 'error'
+
+export interface GenEvent {
+  stage: GenStage
+  message?: string
+  current?: number
+  total?: number
+  cell?: string
+  version_id?: string
+  summary?: VersionStats & { version_id: string; version_no: number }
+}
+
+export interface LineageEdge { from: string; to: string; type: string; created_at: string }

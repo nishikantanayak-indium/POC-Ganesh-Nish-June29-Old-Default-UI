@@ -1,21 +1,25 @@
-# KnowledgeMap — Procurement Intelligence Suite
+# ContractIQ — Contract Intelligence Platform
 
-> **A multi-workspace knowledge graph platform for procurement document analysis.**  
-> Each workspace is an isolated analysis environment. Upload RFP + Risk Sheet + Contract → automated SSE-streaming pipeline → interactive graph → traceability lineage → natural language Q&A.
+> **Two capabilities, one platform.**
+> - **Analysis** — upload RFPs, risk sheets & contracts → automated SSE-streaming pipeline → interactive knowledge graph → traceability lineage → natural-language Q&A.
+> - **Synthetic Data Studio** — generate, validate, quality-check & SME-review synthetic contract artifacts, then publish balanced, versioned datasets straight into Analysis.
+
+The two areas are co-equal entry points from the landing page and share the same document domain (RFP / Risk Sheet / Contract; Requirement / Clause / Risk / Mitigation / LD), so a Studio dataset drops into the Analysis graph with no translation layer.
 
 ---
 
 ## Table of Contents
 
 1. [What This Does](#what-this-does)
-2. [Architecture](#architecture)
-3. [Prerequisites](#prerequisites)
-4. [Quick Start](#quick-start)
-5. [Configuration Reference](#configuration-reference)
-6. [Project Structure](#project-structure)
-7. [UI Walkthrough](#ui-walkthrough)
-8. [Extending the System](#extending-the-system)
-9. [Troubleshooting](#troubleshooting)
+2. [Synthetic Data Studio](#synthetic-data-studio)
+3. [Architecture](#architecture)
+4. [Prerequisites](#prerequisites)
+5. [Quick Start](#quick-start)
+6. [Configuration Reference](#configuration-reference)
+7. [Project Structure](#project-structure)
+8. [UI Walkthrough](#ui-walkthrough)
+9. [Extending the System](#extending-the-system)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -39,6 +43,36 @@ All nodes land in **Neo4j**, scoped to the workspace. Typed edges (`COVERS`, `PA
 
 ---
 
+## Synthetic Data Studio
+
+The second product area (`/studio`) manufactures training-grade synthetic contract data through four core services, then hands finished datasets to Analysis.
+
+| Core service | Does |
+|--------------|------|
+| **Generation** | Generates clauses, requirements, risks, mitigations, LDs, labeled relationship/mapping examples, and whole composite documents (GPT-4o). Supports a free-text **brief** and a **mirror-a-document** mode that reproduces a specific seed doc's section layout + category composition. |
+| **Validation** | Schema Validity (Pydantic/JSON Schema) · Label Validity (approved taxonomy) · Business rules + Coverage Consistency (relationship direction/label). |
+| **Quality** | Duplicate detection (BGE-M3 + Qdrant cosine) · Realism (rules + LLM-as-Judge) · Diversity/Balance (distribution + normalised entropy). |
+| **Dataset Management** | Versioning, lineage, promotion (staging → main), and publication into an Analysis workspace. |
+
+**Categories.** Generation targets a 2-level matrix — **ElementType (5) × TaxonomyLabel (7) = 35 cells** (`Legal, Financial, Technical, KPI, Risk, Compliance, Liquidated Damages`). Each cell has a minimum-examples threshold (default 5).
+
+**Flow.**
+
+```
+upload seeds → classify into matrix → gap-overview heatmap → pick cells + counts (or a brief / mirror a doc)
+   → generate → validate → quality → STAGING
+   → SME review (representative sample; recommended) → promote STAGING → MAIN
+   → publish into an Analysis workspace (feeds the existing graph pipeline)
+```
+
+The Studio workspace has five tabs — **Generate · Validate · Quality · SME Review · Datasets**. There is a dedicated **SME Review** surface that serves a statistically representative, stratified sample for approve / reject / edit-relabel with feedback capture.
+
+Structured metadata lives in **PostgreSQL** (`synthetic_*` tables); raw artifacts (records JSONL, rendered documents) live in **MinIO/S3** (`synthetic` bucket); duplicate-detection embeddings live in a dedicated **Qdrant** collection (`synthetic_elements`).
+
+> Full implementation reference — services, endpoints, config, and data model — is in **[TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md) §14**.
+
+---
+
 ## Architecture
 
 ```
@@ -46,9 +80,11 @@ All nodes land in **Neo4j**, scoped to the workspace. Typed edges (`COVERS`, `PA
 │  React Frontend  (Vite · TypeScript · React Router v7)               │
 │  localhost:5173                                                        │
 │                                                                        │
-│  /                     → Workspace Grid (create / open / delete)      │
-│  /workspace/:id/:tab   → Workspace App                                │
+│  /                          → Landing (Analysis · Synthetic Studio)   │
+│  /workspaces, /workspace/:id/:tab   → Analysis App                    │
 │                          Ingest · Elements · Graph · Traceability     │
+│  /studio, /studio/project/:id/:tab  → Synthetic Data Studio           │
+│                          Generate · Validate · Quality · SME · Datasets│
 └────────────────────────────┬─────────────────────────────────────────┘
                              │ HTTP + SSE streaming
 ┌────────────────────────────▼─────────────────────────────────────────┐
@@ -183,6 +219,8 @@ sudo apt-get install tesseract-ocr
 | `7687` | Neo4j Bolt |
 | `6333` | Qdrant REST |
 | `6334` | Qdrant gRPC |
+| `9000` | MinIO S3 API (Studio artifacts) |
+| `9001` | MinIO web console |
 | `8000` | FastAPI backend |
 | `5173` | React frontend (Vite dev server) |
 
@@ -225,13 +263,14 @@ brew install tesseract   # macOS
 docker compose up -d
 ```
 
-Starts **Neo4j**, **Qdrant**, and **PostgreSQL**. Wait ~20 seconds, then verify:
+Starts **Neo4j**, **Qdrant**, **PostgreSQL**, and **MinIO** (with a one-shot job that creates the `synthetic` bucket). Wait ~20 seconds, then verify:
 
 ```bash
-docker compose ps   # all three should show "healthy" or "running"
+docker compose ps   # all should show "healthy" or "running"
 ```
 
 > **Neo4j browser** is at http://localhost:7474 (user: `neo4j`, password: `password`).
+> **MinIO console** is at http://localhost:9001 (user: `minioadmin`, password: `minioadmin`).
 
 ### 5 — Install Python dependencies
 
@@ -299,6 +338,19 @@ CONFIDENCE_THRESHOLD=0.5
 MAX_TOKENS_EXTRACTION=4000
 MAX_CHUNK_CHARS=3000
 CHUNK_OVERLAP_CHARS=200
+
+# ── Synthetic Data Studio ─────────────────────────────────────────────────────
+SYNTHETIC_STORAGE_BACKEND=s3          # "s3" (MinIO) or "local" (filesystem)
+S3_ENDPOINT_URL=http://localhost:9000
+S3_BUCKET=synthetic
+S3_ACCESS_KEY=minioadmin
+S3_SECRET_KEY=minioadmin
+SYNTHETIC_QDRANT_COLLECTION=synthetic_elements
+SYNTHETIC_MIN_THRESHOLD=5             # min examples per matrix cell
+SYNTHETIC_DUP_EXACT=0.97             # cosine ≥ → exact duplicate
+SYNTHETIC_DUP_NEAR=0.90             # cosine ≥ → near duplicate
+SYNTHETIC_REALISM_FLOOR=0.6          # realism < → flagged for regeneration
+SYNTHETIC_MAX_REGEN=2                # regeneration attempts per failed record
 ```
 
 **Development shortcut — faster and cheaper:**
@@ -326,7 +378,8 @@ GraphRAG POC/
 │   │       ├── graph.py            ← GET graph/data, subgraph, cross-doc-relationships, stats
 │   │       ├── traceability.py     ← GET traceability/coverage + chain/:id
 │   │       ├── chat.py             ← POST chat/ask — intent-aware Q&A
-│   │       └── status.py           ← GET/POST status, reset, elements
+│   │       ├── status.py           ← GET/POST status, reset, elements
+│   │       └── synthetic.py        ← /api/studio — projects, seeds, generate (SSE), sme, publish
 │   │
 │   ├── config/settings.py          ← All env vars as frozen dataclass
 │   │
@@ -355,10 +408,22 @@ GraphRAG POC/
 │   │   ├── embedder.py             ← BGEEmbedder singleton (lazy-loads BAAI/bge-m3)
 │   │   └── qdrant_store.py         ← Per-workspace collection ws_{workspace_id}
 │   │
-│   └── services/
-│       ├── document_service.py     ← Parse + extract + cross-doc relationship extraction
-│       ├── graph_service.py        ← Workspace-scoped facade over Neo4j + Qdrant
-│       └── qa_service.py           ← Intent detection → evidence → GPT-4o synthesis
+│   ├── services/
+│   │   ├── document_service.py     ← Parse + extract + cross-doc relationship extraction
+│   │   ├── graph_service.py        ← Workspace-scoped facade over Neo4j + Qdrant
+│   │   └── qa_service.py           ← Intent detection → evidence → GPT-4o synthesis
+│   │
+│   └── synthetic/                  ← Synthetic Data Studio (four core services)
+│       ├── taxonomy.py             ← ElementType×TaxonomyLabel matrix + business rules
+│       ├── schemas.py              ← Pydantic models / JSON Schema (schema validity)
+│       ├── models.py               ← SyntheticRecord / Relationship / Document + reports
+│       ├── storage.py              ← Artifact store (MinIO/S3 default, local fallback)
+│       ├── db.py                   ← Postgres persistence (synthetic_* tables)
+│       ├── generation_service.py   ← Generation (records / relationships / docs; brief + mirror)
+│       ├── validation_service.py   ← Schema · label · coverage-consistency validation
+│       ├── quality_service.py      ← Duplicate · realism (LLM-judge) · diversity/balance
+│       ├── sme_service.py          ← Stratified sampling + verdicts + feedback
+│       └── dataset_service.py      ← Orchestration · versioning · lineage · promote · publish
 │
 ├── frontend/
 │   └── src/
@@ -372,9 +437,12 @@ GraphRAG POC/
   ├── store/globalToastStore.ts ← Cross-workspace pipeline completion toasts
 │       ├── theme/ThemeContext.tsx  ← Dark/light theme provider
 │       ├── pages/
-│       │   ├── WorkspacesPage.tsx  ← / — workspace grid, create, delete
-│       │   └── WorkspacePage.tsx   ← /workspace/:id — keep-alive tabs, URL routing
+│       │   ├── WorkspacesPage.tsx  ← Analysis workspace grid
+│       │   ├── WorkspacePage.tsx   ← /workspace/:id — keep-alive tabs, URL routing
+│       │   ├── StudioProjectsPage.tsx ← /studio — Studio project grid
+│       │   └── StudioProjectPage.tsx  ← /studio/project/:id — 5 keep-alive tabs
 │       └── components/
+│           ├── studio/             ← GenerateTab · ValidateTab · QualityTab · SMEReviewTab · DatasetsTab
 │           ├── WorkflowPanel.tsx   ← Upload zone + SSE pipeline trigger + run history
 │           ├── KnowledgeGraph.tsx  ← React Flow + d3-force/dagre + cross-doc sidebar
 │           ├── ElementsTable.tsx   ← Filterable/sortable elements table
@@ -388,7 +456,7 @@ GraphRAG POC/
 │           └── Toast.tsx           ← Toast notification system
 │
 ├── Data_Samples/                   ← Sample procurement documents for testing
-├── docker-compose.yml              ← Neo4j 5.x + Qdrant + PostgreSQL 16
+├── docker-compose.yml              ← Neo4j 5.x + Qdrant + PostgreSQL 16 + MinIO
 ├── start_api.sh
 └── start_frontend.sh
 ```

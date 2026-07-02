@@ -339,7 +339,7 @@ export default function ChatPage() {
             <div className="w-6 h-6 rounded-lg bg-primary flex items-center justify-center">
               <KnowledgeMapLogo size={14} className="text-foreground" />
             </div>
-            <span className="font-semibold text-foreground text-sm tracking-tight">KnowledgeMap</span>
+            <span className="font-semibold text-foreground text-sm tracking-tight">ContractIQ</span>
             <span className="text-muted text-sm">/</span>
             <span className="text-foreground text-sm font-medium">Chat</span>
           </div>

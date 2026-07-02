@@ -241,7 +241,7 @@ export default function WorkspacesPage() {
           <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
             <KnowledgeMapLogo size={15} className="text-white" />
           </div>
-          <span className="font-bold text-foreground text-sm tracking-tight">KnowledgeMap</span>
+          <span className="font-bold text-foreground text-sm tracking-tight">ContractIQ</span>
         </button>
         <div className="flex items-center gap-3">
           <ThemeToggle />
