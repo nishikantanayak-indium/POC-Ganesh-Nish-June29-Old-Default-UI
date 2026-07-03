@@ -19,6 +19,7 @@ export default function CustomCursor() {
 
   const target = useRef({ x: -100, y: -100 })
   const ring = useRef({ x: -100, y: -100 })
+  const lastMoveAt = useRef(0)
   const hovering = useRef(false)
   const labelText = useRef<string | null>(null)
   const ripples = useRef<Ripple[]>([])
@@ -38,6 +39,7 @@ export default function CustomCursor() {
     const onMove = (e: MouseEvent) => {
       target.current.x = e.clientX
       target.current.y = e.clientY
+      lastMoveAt.current = performance.now()
       const hoveredEl = (e.target as Element)?.closest?.(HOVER_SELECTOR) ?? null
       hovering.current = !!hoveredEl
       const text = (hoveredEl as HTMLElement | null)?.dataset?.cursorText ?? null
@@ -67,9 +69,18 @@ export default function CustomCursor() {
     document.documentElement.classList.add('custom-cursor-active')
 
     const RIPPLE_MS = 500
+    // While the pointer is actively moving, trail with a visible comet gap;
+    // once it's been still for a beat, snap the ring in fast instead of
+    // waiting out the same slow decay — a single fixed lerp factor can't
+    // give both a gap during motion AND a quick settle at rest.
+    const MOVING_LERP = 0.28
+    const IDLE_LERP = 0.6
+    const IDLE_AFTER_MS = 60
     const tick = () => {
-      ring.current.x += (target.current.x - ring.current.x) * 0.2
-      ring.current.y += (target.current.y - ring.current.y) * 0.2
+      const now = performance.now()
+      const factor = now - lastMoveAt.current > IDLE_AFTER_MS ? IDLE_LERP : MOVING_LERP
+      ring.current.x += (target.current.x - ring.current.x) * factor
+      ring.current.y += (target.current.y - ring.current.y) * factor
       if (ringRef.current) {
         const pressed = ringRef.current.getAttribute('data-pressed') === '1'
         const scale = hovering.current ? 1.8 : pressed ? 0.75 : 1
@@ -87,7 +98,6 @@ export default function CustomCursor() {
       }
 
       // Click ripples — draw as plain divs, prune once past their lifetime.
-      const now = performance.now()
       ripples.current = ripples.current.filter(r => now - r.born < RIPPLE_MS)
       if (rippleLayerRef.current) {
         rippleLayerRef.current.innerHTML = ''
@@ -126,7 +136,7 @@ export default function CustomCursor() {
       <div ref={rippleLayerRef} className="fixed inset-0 z-[9997] pointer-events-none" />
       <div
         ref={ringRef}
-        className="pointer-events-none fixed top-0 left-0 z-[9998] w-7 h-7 rounded-full border opacity-0 transition-[transform,background,border-color,opacity] duration-150 ease-out will-change-transform"
+        className="pointer-events-none fixed top-0 left-0 z-[9998] w-7 h-7 rounded-full border opacity-0 transition-[background,border-color,opacity] duration-150 ease-out will-change-transform"
         style={{ boxShadow: '0 0 14px 1px color-mix(in srgb, var(--primary) 25%, transparent)' }}
       />
       <div
