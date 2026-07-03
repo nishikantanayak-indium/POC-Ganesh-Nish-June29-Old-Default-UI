@@ -49,7 +49,7 @@ The second product area (`/studio`) manufactures training-grade synthetic contra
 
 | Core service | Does |
 |--------------|------|
-| **Generation** | Generates clauses, requirements, risks, mitigations, LDs, labeled relationship/mapping examples, and whole composite documents (GPT-4o). Intent-led (Describe / Mirror / Balance), honours a free-text **brief**, and can **suggest a taxonomy** from your seed documents. |
+| **Generation** | Generates clauses, requirements, risks, mitigations, LDs, labeled relationship/mapping examples, and composite documents (GPT-4o). Intent-led (Describe / Mirror / Balance), honours a free-text **brief**, and can **suggest a taxonomy** from your seed documents. |
 | **Validation** | Schema Validity (Pydantic/JSON Schema) · Label Validity (against the project's label set) · Business rules + Coverage Consistency (relationship direction/label). |
 | **Quality** | Duplicate detection (BGE-M3 + Qdrant cosine) · Realism (rules + LLM-as-Judge) · Diversity/Balance (distribution + normalised entropy). |
 | **Dataset Management** | Immutable versioning, clone-to-edit, delete, lineage, promotion (staging → main), non-destructive publication into an Analysis workspace, and dataset/document export. |
@@ -60,6 +60,8 @@ The second product area (`/studio`) manufactures training-grade synthetic contra
 - **Describe** — free-text brief + element types; the model assigns each record the best-fitting label. No seeds required.
 - **Mirror a document** — reproduce a specific seed doc's section layout + category composition.
 - **Balance coverage** — fill under-threshold cells of the `element types × labels` matrix (target = min examples per cell, default 5).
+
+**Document assembly** is a per-run choice on the Generate tab: **Don't assemble** (records only, no document), **One combined document** (default — every staged record folds into a single Markdown/Word file regardless of document-type mix), or **One document per document type** (opt-in — splits output by `doc_type`). Mirror always produces exactly one document, reproducing the seed's section layout, and ignores this choice.
 
 **Flow.**
 
