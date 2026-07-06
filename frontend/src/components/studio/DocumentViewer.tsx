@@ -5,10 +5,11 @@ import clsx from 'clsx'
 import { exportUrls } from '../../api/client'
 import type { SyntheticDocumentT } from '../../types'
 
-// One reusable document reader/editor — powers both the Review tab
-// (approve/reject/edit) and the Document Library tab (read-only + publish).
-// No version/Git language anywhere; documents move through a plain
-// Draft → In Review → Approved/Rejected → Published lifecycle.
+// The single document reader/editor for the Review tab — the whole lifecycle
+// (edit/approve/reject, then send an approved document to storage) lives in
+// one place instead of a separate "library" screen; the action bar adapts to
+// doc.status rather than needing its own tab. No version/Git language
+// anywhere; documents move through Draft → In Review → Approved/Rejected → Published.
 
 export const STATUS_LABEL: Record<string, string> = {
   staged: 'Pending review',
@@ -43,7 +44,6 @@ interface Props {
   doc: SyntheticDocumentT
   markdown: string
   loading: boolean
-  mode: 'review' | 'library'
   busy: boolean
   onApprove?: () => void
   onReject?: () => void
@@ -54,7 +54,7 @@ interface Props {
 }
 
 export default function DocumentViewer({
-  doc, markdown, loading, mode, busy, onApprove, onReject, onSaveEdit, onPublish, comment, onCommentChange,
+  doc, markdown, loading, busy, onApprove, onReject, onSaveEdit, onPublish, comment, onCommentChange,
 }: Props) {
   const [editing, setEditing] = useState(false)
   const [draftMarkdown, setDraftMarkdown] = useState(markdown)
@@ -108,7 +108,8 @@ export default function DocumentViewer({
         </div>
       )}
 
-      {mode === 'review' && (
+      {/* Pending review — approve/reject/edit */}
+      {doc.status === 'staged' && (
         <>
           <input value={comment} onChange={e => onCommentChange(e.target.value)} placeholder="Optional feedback comment…"
             className="w-full bg-card border border-border rounded-lg px-3 py-1.5 text-xs text-foreground placeholder-muted/50 focus:outline-none focus:border-primary" />
@@ -136,18 +137,35 @@ export default function DocumentViewer({
         </>
       )}
 
-      {mode === 'library' && (
+      {/* Approved — still editable, plus the one action that actually matters next */}
+      {doc.status === 'sme_approved' && (
         <div className="flex items-center gap-2">
-          {doc.status === 'sme_approved' && onPublish && (
+          {onPublish && (
             <button onClick={onPublish} disabled={busy}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary text-white hover:bg-primary/90 disabled:opacity-50">
               <Send size={12} /> Send to Document Storage
             </button>
           )}
-          {doc.status === 'published' && (
-            <span className="text-xs text-primary flex items-center gap-1.5"><Check size={13} /> Sent to document storage</span>
+          {editing ? (
+            <button onClick={() => onSaveEdit?.(draftMarkdown, draftTitle)} disabled={busy}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-card text-foreground border border-border hover:border-primary/40">
+              <Check size={12} /> Save changes
+            </button>
+          ) : (
+            <button onClick={() => setEditing(true)} disabled={busy}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-card text-muted border border-border hover:text-foreground">
+              <Pencil size={12} /> Edit
+            </button>
           )}
         </div>
+      )}
+
+      {doc.status === 'sme_rejected' && (
+        <p className="text-xs text-danger flex items-center gap-1.5"><X size={13} /> Rejected — not eligible for publishing.</p>
+      )}
+
+      {doc.status === 'published' && (
+        <p className="text-xs text-primary flex items-center gap-1.5"><Check size={13} /> Sent to document storage.</p>
       )}
     </div>
   )

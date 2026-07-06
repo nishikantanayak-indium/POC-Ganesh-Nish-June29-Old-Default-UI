@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Trash2, FlaskConical, Clock, X, ArrowRight, ArrowLeft, Database, ShieldCheck, Sparkles } from 'lucide-react'
+import { Plus, Trash2, FlaskConical, Clock, X, ArrowRight, ArrowLeft, LibraryBig, UserCheck, Sparkles } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import clsx from 'clsx'
 import { fetchProjects, createProject, deleteProject } from '../api/client'
@@ -16,10 +16,9 @@ function timeAgo(iso: string): string {
 }
 
 const CAPABILITIES = [
-  { icon: <Sparkles size={12} />,    label: 'Generation'   },
-  { icon: <ShieldCheck size={12} />, label: 'Validation'   },
-  { icon: <FlaskConical size={12} />,label: 'Quality + SME' },
-  { icon: <Database size={12} />,    label: 'Versioned Datasets' },
+  { icon: <Sparkles size={12} />,   label: 'Document Generation' },
+  { icon: <UserCheck size={12} />,  label: 'Document Review' },
+  { icon: <LibraryBig size={12} />, label: 'Document Storage' },
 ]
 
 function CreateModal({ onClose, onCreate }: {
@@ -187,11 +186,12 @@ export default function StudioProjectsPage() {
         <div className="relative max-w-5xl mx-auto px-8 py-5 flex items-center justify-between gap-6 flex-wrap">
           <div className="flex-1 min-w-0">
             <h1 className="text-2xl font-bold text-foreground tracking-tight mb-1.5">
-              Generate. Validate. <span style={{ color: 'var(--primary)' }}>Review. Publish.</span>
+              Generate. <span style={{ color: 'var(--primary)' }}>Review. Publish.</span>
             </h1>
             <p className="text-muted text-xs max-w-md leading-relaxed">
-              Seed with real docs, close category gaps with synthetic requirements, clauses, risks & contracts,
-              SME-review a representative sample, then publish a balanced dataset into Analysis.
+              Seed with real documents, generate complete RFPs, Contracts & Risk documents to close gaps,
+              review each one in a real editor, then send approved documents to your document storage —
+              ready for any Analysis workspace to pull in.
             </p>
           </div>
           <div className="flex flex-wrap gap-1.5 shrink-0">

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
-import { ArrowLeft, FlaskConical, Sparkles, UserCheck, LibraryBig } from 'lucide-react'
+import { ArrowLeft, FlaskConical, Sparkles, UserCheck } from 'lucide-react'
 import { motion } from 'framer-motion'
 import clsx from 'clsx'
 
@@ -14,18 +14,18 @@ import GenerateTab from '../components/studio/GenerateTab'
 // import ValidateTab from '../components/studio/ValidateTab'
 // import QualityTab from '../components/studio/QualityTab'
 import ReviewTab from '../components/studio/SMEReviewTab'
-import DocumentLibraryTab from '../components/studio/DocumentLibraryTab'
 import { fetchStudioMeta, fetchProject, fetchOverview, fetchVersions } from '../api/client'
 import type { StudioMeta, StudioProject, StudioOverview } from '../types'
 
 // No version/staging/main language anywhere in this page — every generated
 // document just flows Draft → In Review → Approved/Rejected → Published.
-type Tab = 'generate' | 'review' | 'library'
+// The Review tab handles the whole lifecycle including sending an approved
+// document to storage, so there's no separate "Documents" tab.
+type Tab = 'generate' | 'review'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'generate', label: 'Generate', icon: <Sparkles size={14} /> },
   { id: 'review',   label: 'Review',   icon: <UserCheck size={14} /> },
-  { id: 'library',  label: 'Documents', icon: <LibraryBig size={14} /> },
 ]
 
 export default function StudioProjectPage() {
@@ -127,11 +127,6 @@ export default function StudioProjectPage() {
         {visited.has('review') && (
           <div style={tabStyle('review')}>
             <ReviewTab projectId={projectId} onToast={addToast} />
-          </div>
-        )}
-        {visited.has('library') && (
-          <div style={tabStyle('library')}>
-            <DocumentLibraryTab projectId={projectId} onToast={addToast} />
           </div>
         )}
       </main>

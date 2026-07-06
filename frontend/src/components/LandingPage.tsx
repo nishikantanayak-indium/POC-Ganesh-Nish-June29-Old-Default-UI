@@ -2,7 +2,7 @@ import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import {
   Network, GitBranch, MessageSquare, ArrowRight, FlaskConical,
-  Sparkles, ShieldCheck, Database, CheckCircle2,
+  Sparkles, UserCheck, LibraryBig, CheckCircle2,
 } from 'lucide-react'
 import KnowledgeMapLogo from './KnowledgeMapLogo'
 import ThemeToggle from './ThemeToggle'
@@ -35,11 +35,11 @@ const AREAS: Area[] = [
     key: 'studio',
     icon: <FlaskConical size={18} className="text-primary" />,
     title: 'Synthetic Data Studio',
-    blurb: 'Generate, validate, quality-check & SME-review synthetic contract data.',
+    blurb: 'Generate complete RFPs, Contracts & Risk documents, review them, publish to storage.',
     bullets: [
-      { icon: <Sparkles size={13} />,    text: 'Generate clauses, requirements, risks & whole contracts' },
-      { icon: <ShieldCheck size={13} />, text: 'Schema · label · duplicate · realism · diversity checks' },
-      { icon: <Database size={13} />,    text: 'SME review → versioned datasets → publish to Analysis' },
+      { icon: <Sparkles size={13} />,   text: 'Generate whole documents, not disconnected clauses' },
+      { icon: <UserCheck size={13} />,  text: 'Study & edit each document in a real editor before approving' },
+      { icon: <LibraryBig size={13} />, text: 'Send approved documents to storage — any workspace can pull them in' },
     ],
     cta: 'Open Studio',
     route: '/studio',
@@ -87,8 +87,8 @@ export default function LandingPage() {
         <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }}
           className="text-muted text-sm max-w-xl mb-10 leading-relaxed">
           Two capabilities, one platform — <span className="text-foreground">analyze</span> real procurement
-          documents as a knowledge graph, and <span className="text-foreground">generate</span> validated,
-          SME-reviewed synthetic datasets that publish straight back into it.
+          documents as a knowledge graph, and <span className="text-foreground">generate</span> reviewed
+          synthetic documents that publish straight back into it.
         </motion.p>
 
         {/* Two co-equal product areas */}
@@ -129,7 +129,7 @@ export default function LandingPage() {
           initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}
           className="flex items-center flex-wrap justify-center gap-2 text-[11px] font-mono text-muted mb-8"
         >
-          {['Generate', 'Validate', 'Quality', 'SME Review', 'Publish', 'Analyze'].map((s, i, arr) => (
+          {['Generate', 'Review', 'Publish', 'Analyze'].map((s, i, arr) => (
             <span key={s} className="flex items-center gap-2">
               <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-card border border-border">
                 <CheckCircle2 size={11} className="text-primary" />{s}
