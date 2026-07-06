@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import logging
 
-from core.models import DocumentType, ParsedDocument
+from core.models import DocumentType, PageContent, ParsedDocument
 from extractors import LLMExtractor
 from synthetic import db as synthetic_db
 from synthetic.storage import get_artifact_store
@@ -36,6 +36,10 @@ def import_synthetic_document(workspace_id: str, store_document_id: str) -> dict
     parsed = ParsedDocument(
         id=doc_id, name=f"{entry.title} (_gen)",
         type=DocumentType(entry.doc_type), pages=[markdown], total_pages=1,
+        # Without this the Elements Explorer's Text/OCR tabs show "No extracted
+        # content available" — they read doc.page_contents, not doc.pages.
+        # ocr_text must be "" (not None) to match the real parsers' convention.
+        page_contents=[PageContent(page_num=1, native_text=markdown, ocr_text="", tables=[])],
     )
     content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
 

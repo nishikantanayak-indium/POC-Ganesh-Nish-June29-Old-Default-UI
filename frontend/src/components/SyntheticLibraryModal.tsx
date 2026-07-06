@@ -1,46 +1,81 @@
-import { useEffect, useState } from 'react'
-import { X, FlaskConical, FileText, Check } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { X, FlaskConical, FileText, Check, Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
 import clsx from 'clsx'
-import { fetchDocumentStore, importSyntheticDocument } from '../api/client'
+import { fetchDocumentStore, fetchDocuments } from '../api/client'
+import { useSyntheticImportStore } from '../store/syntheticImportStore'
 import type { StoreDocument } from '../types'
 
 interface Props {
   workspaceId: string
   onClose: () => void
   onImported: () => void
-  onToast: (msg: string, type: 'success' | 'error') => void
+}
+
+// The id import_synthetic_document() assigns each imported document —
+// mirrors backend/services/synthetic_import.py's `f"GEN_{entry.id[:8].upper()}"`.
+function importedDocId(storeDocId: string): string {
+  return `GEN_${storeDocId.slice(0, 8).toUpperCase()}`
 }
 
 // Lets a workspace pull ("import") a document from the shared, cross-workspace
 // Synthetic Data Studio document store — on import it's run through the real
 // ingestion pipeline (extraction + graph-build), exactly like a real upload,
 // so it's tagged `_gen` and behaves identically to real ingested data.
-export default function SyntheticLibraryModal({ workspaceId, onClose, onImported, onToast }: Props) {
+//
+// In-flight imports live in useSyntheticImportStore (module scope), not local
+// state — closing this modal mid-import used to throw the spinner state away
+// even though the fetch itself kept running in the background; now the
+// tracking survives the modal unmounting/remounting.
+export default function SyntheticLibraryModal({ workspaceId, onClose, onImported }: Props) {
   const [docs, setDocs] = useState<StoreDocument[]>([])
   const [loading, setLoading] = useState(true)
   const [docTypeFilter, setDocTypeFilter] = useState('')
-  const [importingId, setImportingId] = useState<string | null>(null)
-  const [importedIds, setImportedIds] = useState<Set<string>>(new Set())
+  // What's actually present in this workspace right now — checked live against
+  // the graph rather than trusting the store's historical `imported_into` log,
+  // which stays stale forever if the workspace is later wiped/reset outside
+  // this modal's knowledge.
+  const [presentIds, setPresentIds] = useState<Set<string>>(new Set())
+  const mounted = useRef(true)
+  useEffect(() => {
+    // Reset (not just rely on the initial useRef value) — React 18 StrictMode's
+    // dev-mode mount→cleanup→remount cycle runs this cleanup once immediately,
+    // and without resetting here `mounted.current` would stay false forever,
+    // silently skipping every state update this component ever makes (the
+    // exact cause of "Loading…" never clearing).
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+
+  const importingIds = useSyntheticImportStore(s => s.importingIds)
+  const startImport = useSyntheticImportStore(s => s.start)
+
+  const refreshPresence = () => {
+    fetchDocuments(workspaceId)
+      .then(list => { if (mounted.current) setPresentIds(new Set(list.map(d => d.id))) })
+      .catch(() => { /* ignore — worst case "Added" state is just unavailable */ })
+  }
 
   useEffect(() => {
     setLoading(true)
     fetchDocumentStore(docTypeFilter || undefined)
-      .then(setDocs)
-      .catch(() => onToast('Could not load the synthetic document store', 'error'))
-      .finally(() => setLoading(false))
+      .then(list => { if (mounted.current) setDocs(list) })
+      .catch(() => { /* the empty-state message covers this */ })
+      .finally(() => { if (mounted.current) setLoading(false) })
   }, [docTypeFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleImport = async (doc: StoreDocument) => {
-    setImportingId(doc.id)
-    try {
-      const res = await importSyntheticDocument(workspaceId, doc.id)
-      setImportedIds(prev => new Set([...prev, doc.id]))
-      onToast(`Imported "${res.title}" — ${res.elements} elements added`, 'success')
-      onImported()
-    } catch (err: unknown) {
-      onToast(err instanceof Error ? err.message : 'Import failed', 'error')
-    } finally { setImportingId(null) }
+  useEffect(() => {
+    // Re-sync on mount AND whenever any import starts/finishes (in this
+    // modal or a previous instance of it) — this is what makes "Added" and
+    // the workspace's element/graph view catch up after reopening the modal
+    // mid-import, and it's also the trigger for refreshing the underlying
+    // Ingest view once an import completes.
+    refreshPresence()
+    onImported()
+  }, [importingIds]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleImport = (doc: StoreDocument) => {
+    startImport(workspaceId, doc.id, doc.title)
   }
 
   const docTypes = [...new Set(docs.map(d => d.doc_type))]
@@ -86,7 +121,8 @@ export default function SyntheticLibraryModal({ workspaceId, onClose, onImported
             </p>
           ) : (
             docs.map(doc => {
-              const imported = importedIds.has(doc.id) || doc.imported_into.some(i => i.workspace_id === workspaceId)
+              const imported = presentIds.has(importedDocId(doc.id))
+              const importing = importingIds.has(doc.id)
               return (
                 <div key={doc.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-border bg-card">
                   <FileText size={14} className="text-muted shrink-0" />
@@ -94,11 +130,17 @@ export default function SyntheticLibraryModal({ workspaceId, onClose, onImported
                     <p className="text-sm text-foreground truncate">{doc.title}</p>
                     <p className="text-[11px] text-muted font-mono">{doc.doc_type} · {doc.industry} · {doc.language}</p>
                   </div>
-                  <button onClick={() => handleImport(doc)} disabled={importingId === doc.id || imported}
-                    className={clsx('shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors',
+                  <button onClick={() => handleImport(doc)} disabled={importing || imported}
+                    className={clsx('shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors min-w-[7.5rem] justify-center',
                       imported ? 'text-success bg-success/10 border border-success/30 cursor-default'
-                        : 'bg-primary text-white hover:bg-primary/90 disabled:opacity-50')}>
-                    {imported ? <><Check size={12} /> Added</> : importingId === doc.id ? 'Importing…' : 'Add to workspace'}
+                        : 'bg-primary text-white hover:bg-primary/90 disabled:opacity-70')}>
+                    {imported ? (
+                      <><Check size={12} /> Added</>
+                    ) : importing ? (
+                      <><Loader2 size={12} className="animate-spin" /> Importing…</>
+                    ) : (
+                      'Add to workspace'
+                    )}
                   </button>
                 </div>
               )

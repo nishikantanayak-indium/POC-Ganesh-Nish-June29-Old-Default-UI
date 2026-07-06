@@ -301,7 +301,6 @@ export default function WorkspacePage() {
           workspaceId={workspaceId}
           onClose={() => setShowSyntheticLibrary(false)}
           onImported={loadData}
-          onToast={addToast}
         />
       )}
     </motion.div>
