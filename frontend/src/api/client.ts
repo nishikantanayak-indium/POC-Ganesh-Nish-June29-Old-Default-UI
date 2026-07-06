@@ -5,6 +5,7 @@ import type {
   StudioProject, StudioMeta, StudioOverview, StudioVersion, SyntheticRecordT,
   SyntheticRelationshipT, RecordReports, SMESummary, LineageEdge, GenSelection,
   GenKnobs, GenEvent, SyntheticDocumentT,
+  DocTypeOverview, DocGenTarget, DocGenKnobs, DocReviewQueue, DocSMESummary, StoreDocument,
 } from '../types'
 
 const BASE = ''  // vite proxy forwards /api → localhost:8000
@@ -327,6 +328,12 @@ export async function fetchVersionDocuments(versionId: string): Promise<Syntheti
   return (await r.json()).documents
 }
 
+export async function fetchDocumentMarkdown(versionId: string, docId: string): Promise<string> {
+  const r = await fetch(`${studio}/versions/${versionId}/documents/${docId}/export.md`)
+  if (!r.ok) throw new Error(await r.text())
+  return r.text()
+}
+
 // Download URLs (used as <a href> so the browser handles the file save).
 export const exportUrls = {
   records: (v: string) => `${studio}/versions/${v}/export/records.jsonl`,
@@ -388,6 +395,97 @@ export function streamGenerate(
     }
   })()
   return () => controller.abort()
+}
+
+// ── Document-first generation (pivot) ────────────────────────────────────────
+
+export async function fetchDocTypeOverview(projectId: string): Promise<DocTypeOverview> {
+  const r = await fetch(`${studio}/projects/${projectId}/doc-overview`)
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export function streamGenerateDocuments(
+  projectId: string,
+  docTargets: DocGenTarget[],
+  knobs: DocGenKnobs,
+  onEvent: (e: GenEvent) => void,
+  onDone: () => void,
+  onError: (err: string) => void,
+): () => void {
+  const controller = new AbortController()
+  ;(async () => {
+    try {
+      const response = await fetch(`${studio}/projects/${projectId}/generate-documents`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_targets: docTargets, knobs }), signal: controller.signal,
+      })
+      if (!response.ok) { onError(await response.text()); return }
+      const reader = response.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try { onEvent(JSON.parse(line.slice(6)) as GenEvent) } catch { /* malformed */ }
+          }
+        }
+      }
+      onDone()
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name !== 'AbortError') onError(err.message)
+    }
+  })()
+  return () => controller.abort()
+}
+
+export async function fetchSmeDocumentQueue(versionId: string): Promise<DocReviewQueue> {
+  const r = await fetch(`${studio}/versions/${versionId}/sme/documents/queue`)
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function submitSmeDocumentVerdict(
+  versionId: string,
+  body: { document_id: string; verdict: string; corrected_markdown?: string; corrected_title?: string; comment?: string },
+): Promise<{ document_id: string; verdict: string }> {
+  const r = await fetch(`${studio}/versions/${versionId}/sme/documents/verdict`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function fetchSmeDocumentSummary(versionId: string): Promise<DocSMESummary> {
+  const r = await fetch(`${studio}/versions/${versionId}/sme/documents/summary`)
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function publishDocumentsToStore(versionId: string): Promise<{ version_id: string; published: number }> {
+  const r = await fetch(`${studio}/versions/${versionId}/publish-to-store`, { method: 'POST' })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function fetchDocumentStore(docType?: string): Promise<StoreDocument[]> {
+  const q = docType ? `?doc_type=${encodeURIComponent(docType)}` : ''
+  const r = await fetch(`${studio}/store/documents${q}`)
+  if (!r.ok) throw new Error(await r.text())
+  return (await r.json()).documents
+}
+
+export async function importSyntheticDocument(
+  workspaceId: string, storeDocumentId: string,
+): Promise<{ workspace_id: string; document_id: string; title: string; elements: number }> {
+  const r = await fetch(`${ws(workspaceId)}/import-synthetic/${storeDocumentId}`, { method: 'POST' })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
 }
 
 export function streamPipeline(

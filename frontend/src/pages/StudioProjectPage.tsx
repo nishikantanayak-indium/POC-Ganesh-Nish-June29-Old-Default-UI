@@ -1,25 +1,27 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
-import { ArrowLeft, FlaskConical, Sparkles, ShieldCheck, BarChart3, UserCheck, Database } from 'lucide-react'
+import { ArrowLeft, FlaskConical, Sparkles, UserCheck, Database } from 'lucide-react'
 import { motion } from 'framer-motion'
 import clsx from 'clsx'
 
 import ThemeToggle from '../components/ThemeToggle'
 import { ToastContainer, useToast } from '../components/Toast'
 import GenerateTab from '../components/studio/GenerateTab'
-import ValidateTab from '../components/studio/ValidateTab'
-import QualityTab from '../components/studio/QualityTab'
+// Parked — element-level generation's Validate/Quality tabs. Not deleted:
+// the backend services (validation_service, quality_service) and these
+// components stay fully functional, just unreachable from the document-first
+// UI for now. Re-add to TABS + the render block below to bring them back.
+// import ValidateTab from '../components/studio/ValidateTab'
+// import QualityTab from '../components/studio/QualityTab'
 import SMEReviewTab from '../components/studio/SMEReviewTab'
 import DatasetsTab from '../components/studio/DatasetsTab'
 import { fetchStudioMeta, fetchProject, fetchOverview, fetchVersions } from '../api/client'
 import type { StudioMeta, StudioProject, StudioOverview, StudioVersion } from '../types'
 
-type Tab = 'generate' | 'validate' | 'quality' | 'sme' | 'datasets'
+type Tab = 'generate' | 'sme' | 'datasets'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'generate',  label: 'Generate',    icon: <Sparkles size={14} /> },
-  { id: 'validate',  label: 'Validate',    icon: <ShieldCheck size={14} /> },
-  { id: 'quality',   label: 'Quality',     icon: <BarChart3 size={14} /> },
   { id: 'sme',       label: 'SME Review',  icon: <UserCheck size={14} /> },
   { id: 'datasets',  label: 'Datasets',    icon: <Database size={14} /> },
 ]
@@ -137,24 +139,14 @@ export default function StudioProjectPage() {
       <main className="flex-1 overflow-hidden relative">
         <div style={tabStyle('generate')}>
           <GenerateTab
-            projectId={projectId} meta={meta} overview={overview}
+            projectId={projectId} overview={overview}
             onReloadOverview={reloadOverview} onGenerationComplete={onGenerationComplete}
             onToast={addToast}
           />
         </div>
-        {visited.has('validate') && (
-          <div style={tabStyle('validate')}>
-            <ValidateTab meta={meta} version={activeVersion} />
-          </div>
-        )}
-        {visited.has('quality') && (
-          <div style={tabStyle('quality')}>
-            <QualityTab version={activeVersion} />
-          </div>
-        )}
         {visited.has('sme') && (
           <div style={tabStyle('sme')}>
-            <SMEReviewTab meta={meta} version={activeVersion} onToast={addToast} />
+            <SMEReviewTab version={activeVersion} onToast={addToast} />
           </div>
         )}
         {visited.has('datasets') && (

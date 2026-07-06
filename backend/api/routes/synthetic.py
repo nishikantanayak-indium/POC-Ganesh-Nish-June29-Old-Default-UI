@@ -266,6 +266,17 @@ async def overview(project_id: str) -> dict:
     return await asyncio.to_thread(_build_overview, project)
 
 
+@router.get("/projects/{project_id}/doc-overview")
+async def doc_overview(project_id: str) -> dict:
+    """Doc-type-keyed gap analysis — the document-first counterpart to
+    ``overview`` above (which is the parked ElementType×Label matrix)."""
+    ds = get_dataset_service()
+    try:
+        return await asyncio.to_thread(ds.doc_type_overview, project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Generate (SSE)
 # ---------------------------------------------------------------------------
@@ -309,6 +320,53 @@ async def _stream_generate(project_id: str, body: GenerateBody) -> AsyncGenerato
 async def generate(project_id: str, body: GenerateBody) -> StreamingResponse:
     return StreamingResponse(
         _stream_generate(project_id, body),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Generate whole documents (SSE) — document-first pivot
+# ---------------------------------------------------------------------------
+
+
+class DocGenerateBody(BaseModel):
+    doc_targets: List[dict]   # [{"doc_type": "RFP", "count": 5, "brief": "..."}]
+    knobs: dict = {}
+
+
+async def _stream_generate_documents(project_id: str, body: DocGenerateBody) -> AsyncGenerator[str, None]:
+    ds = get_dataset_service()
+    progress_q: _queue.SimpleQueue = _queue.SimpleQueue()
+
+    def _cb(evt: dict) -> None:
+        progress_q.put(evt)
+
+    def _run() -> dict:
+        return ds.run_document_generation(project_id, body.doc_targets, body.knobs, progress_cb=_cb)
+
+    task = asyncio.create_task(asyncio.to_thread(_run))
+    yield _sse({"stage": "queued", "message": "Generation started"})
+
+    while not task.done():
+        await asyncio.sleep(0.25)
+        while not progress_q.empty():
+            yield _sse(progress_q.get_nowait())
+    while not progress_q.empty():
+        yield _sse(progress_q.get_nowait())
+
+    try:
+        summary = await task
+        yield _sse({"stage": "done", "summary": summary})
+    except Exception as exc:
+        logger.exception("Document generation failed")
+        yield _sse({"stage": "error", "message": str(exc)})
+
+
+@router.post("/projects/{project_id}/generate-documents")
+async def generate_documents(project_id: str, body: DocGenerateBody) -> StreamingResponse:
+    return StreamingResponse(
+        _stream_generate_documents(project_id, body),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
@@ -429,6 +487,52 @@ async def sme_queue(version_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# SME review — whole documents (document-first pivot)
+# ---------------------------------------------------------------------------
+
+
+class DocVerdictBody(BaseModel):
+    document_id: str
+    verdict: str
+    corrected_markdown: Optional[str] = None
+    corrected_title: Optional[str] = None
+    comment: str = ""
+    reviewer: str = "sme"
+
+
+@router.get("/versions/{version_id}/sme/documents/queue")
+async def sme_documents_queue(version_id: str) -> dict:
+    sme = get_sme_service()
+    docs = await asyncio.to_thread(db.list_documents, version_id)
+    summary = await asyncio.to_thread(sme.document_summary, version_id)
+    return {"documents": [d.to_dict() for d in docs], "summary": summary}
+
+
+@router.post("/versions/{version_id}/sme/documents/verdict")
+async def sme_documents_verdict(version_id: str, body: DocVerdictBody) -> dict:
+    sme = get_sme_service()
+    try:
+        verdict = SMEVerdict(body.verdict)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"invalid verdict '{body.verdict}'")
+    try:
+        return await asyncio.to_thread(
+            sme.submit_document_verdict, body.document_id, verdict, body.reviewer,
+            body.corrected_markdown, body.corrected_title, body.comment,
+        )
+    except VersionImmutableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/versions/{version_id}/sme/documents/summary")
+async def sme_documents_summary(version_id: str) -> dict:
+    sme = get_sme_service()
+    return await asyncio.to_thread(sme.document_summary, version_id)
+
+
+# ---------------------------------------------------------------------------
 # Promote / publish / lineage
 # ---------------------------------------------------------------------------
 
@@ -528,7 +632,31 @@ async def publish(version_id: str, body: PublishBody) -> dict:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/versions/{version_id}/publish-to-store")
+async def publish_to_store(version_id: str) -> dict:
+    """Push SME-approved documents into the shared, cross-workspace document
+    store (tagged `_gen`) — the document-first counterpart to ``publish``
+    above. Does not touch any specific Analysis workspace; workspaces pull
+    from the store on demand via ``POST /api/workspaces/{id}/import-synthetic/{doc_id}``."""
+    ds = get_dataset_service()
+    try:
+        return await asyncio.to_thread(ds.publish_documents_to_store, version_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.get("/projects/{project_id}/lineage")
 async def lineage(project_id: str) -> dict:
     ds = get_dataset_service()
     return await asyncio.to_thread(ds.lineage, project_id)
+
+
+# ---------------------------------------------------------------------------
+# Shared document store (cross-workspace, browsable from any Analysis workspace)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/store/documents")
+async def store_documents(doc_type: Optional[str] = None) -> dict:
+    docs = await asyncio.to_thread(db.list_store_documents, doc_type)
+    return {"documents": [d.to_dict() for d in docs]}

@@ -57,6 +57,18 @@ async def update_ws(workspace_id: str, body: WorkspaceUpdate) -> dict:
     return ws.to_dict()
 
 
+@router.post("/{workspace_id}/import-synthetic/{store_document_id}")
+async def import_synthetic(workspace_id: str, store_document_id: str) -> dict:
+    """Pull a published synthetic document from the shared Studio document
+    store into this workspace, running it through the real extraction +
+    graph-build pipeline (same path a real file upload takes)."""
+    from services.synthetic_import import import_synthetic_document
+    try:
+        return await asyncio.to_thread(import_synthetic_document, workspace_id, store_document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @router.delete("/{workspace_id}")
 async def delete_ws(workspace_id: str) -> dict:
     # Clear all graph + vector data for this workspace

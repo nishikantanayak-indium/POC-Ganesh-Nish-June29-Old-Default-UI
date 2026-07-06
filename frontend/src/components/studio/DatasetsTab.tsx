@@ -5,11 +5,10 @@ import {
 } from 'lucide-react'
 import clsx from 'clsx'
 import {
-  promoteVersion, publishVersion, cloneVersion, deleteVersion, fetchLineage,
-  fetchWorkspaces, createWorkspace, fetchVersionDocuments, exportUrls,
+  promoteVersion, publishDocumentsToStore, cloneVersion, deleteVersion, fetchLineage,
+  fetchVersionDocuments, exportUrls,
 } from '../../api/client'
-import { useGlobalToastStore } from '../../store/globalToastStore'
-import type { StudioVersion, LineageEdge, Workspace, SyntheticDocumentT } from '../../types'
+import type { StudioVersion, LineageEdge, SyntheticDocumentT } from '../../types'
 
 interface Props {
   projectId: string
@@ -19,36 +18,24 @@ interface Props {
   onToast: (msg: string, type: 'success' | 'error') => void
 }
 
-function VersionCard({ version, workspaces, onPromote, onPublish, onClone, onDelete, busy }: {
+function VersionCard({ version, onPromote, onPublish, onClone, onDelete, busy }: {
   version: StudioVersion
-  workspaces: Workspace[]
   onPromote: (id: string) => void
-  onPublish: (id: string, wsId: string, wsName: string) => void
+  onPublish: (id: string) => void
   onClone: (id: string) => void
   onDelete: (id: string) => void
   busy: boolean
 }) {
-  const [wsId, setWsId] = useState('')
-  const [newWsName, setNewWsName] = useState('')
   const [showExport, setShowExport] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [docs, setDocs] = useState<SyntheticDocumentT[]>([])
   const isMain = version.status === 'main'
   const s = version.stats
-  const pubs = s?.published_to ?? []
-  // Only staged + SME-approved records are published; if there are none, publishing
-  // would fail — so the control is disabled with an explanation.
+  const pubs = s?.published_to_store ?? []
+  // Only staged + SME-approved documents are published; if there are none,
+  // publishing would fail — so the control is disabled with an explanation.
   const sc = version.status_counts ?? {}
   const publishable = (sc['staged'] ?? 0) + (sc['sme_approved'] ?? 0)
-
-  const doPublish = () => {
-    if (wsId === '__new__') {
-      if (!newWsName.trim()) return
-      onPublish(version.id, '__new__', newWsName.trim())
-    } else if (wsId) {
-      onPublish(version.id, wsId, workspaces.find(w => w.id === wsId)?.name ?? 'workspace')
-    }
-  }
 
   const toggleExport = async () => {
     const next = !showExport
@@ -123,26 +110,15 @@ function VersionCard({ version, workspaces, onPromote, onPublish, onClone, onDel
         </button>
 
         {publishable === 0 ? (
-          <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-muted border border-border bg-card/50" title="No approved or staged records">
+          <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-muted border border-border bg-card/50" title="No approved or staged documents">
             <Rocket size={12} /> Nothing to publish
           </span>
         ) : (
-          <div className="flex items-center gap-1.5">
-            <select value={wsId} onChange={e => setWsId(e.target.value)}
-              className="bg-card border border-border rounded-lg px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-primary">
-              <option value="">Publish to…</option>
-              {workspaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-              <option value="__new__">➕ New workspace…</option>
-            </select>
-            {wsId === '__new__' && (
-              <input value={newWsName} onChange={e => setNewWsName(e.target.value)} placeholder="workspace name"
-                className="bg-card border border-border rounded-lg px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-primary w-40" />
-            )}
-            <button onClick={doPublish} disabled={!wsId || busy || (wsId === '__new__' && !newWsName.trim())}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary text-white hover:bg-primary/90 disabled:opacity-40">
-              <Rocket size={12} /> Publish {publishable > 0 && <span className="opacity-70">({publishable})</span>}
-            </button>
-          </div>
+          <button onClick={() => onPublish(version.id)} disabled={busy}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary text-white hover:bg-primary/90 disabled:opacity-40"
+            title="Push accepted documents into the shared document store, tagged _gen">
+            <Rocket size={12} /> Publish to store {publishable > 0 && <span className="opacity-70">({publishable})</span>}
+          </button>
         )}
 
         <button onClick={toggleExport}
@@ -208,13 +184,10 @@ function ExportLink({ href, icon, label, small }: { href: string; icon: React.Re
 }
 
 export default function DatasetsTab({ projectId, versions, onReloadVersions, onSelectVersion, onToast }: Props) {
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [lineage, setLineage] = useState<LineageEdge[]>([])
   const [busy, setBusy] = useState(false)
-  const addGlobalToast = useGlobalToastStore(s => s.add)
 
   const loadAux = async () => {
-    try { setWorkspaces(await fetchWorkspaces()) } catch { /* ignore */ }
     try { setLineage(await fetchLineage(projectId)) } catch { /* ignore */ }
   }
   useEffect(() => { loadAux() }, [projectId, versions.length]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -247,20 +220,12 @@ export default function DatasetsTab({ projectId, versions, onReloadVersions, onS
     finally { setBusy(false) }
   }
 
-  const handlePublish = async (versionId: string, wsId: string, wsName: string) => {
+  const handlePublish = async (versionId: string) => {
     setBusy(true)
     try {
-      let targetId = wsId
-      const created = wsId === '__new__'
-      if (created) { const ws = await createWorkspace(wsName, 'Published from Synthetic Data Studio'); targetId = ws.id }
-      const res = await publishVersion(versionId, targetId)
-      await loadAux()
-      // Global toast: survives navigation and offers an "Open workspace" link,
-      // so publishing to a new/existing Analysis workspace is always confirmed.
-      addGlobalToast(
-        `${created ? 'Created workspace & published' : 'Published'} ${res.elements ?? 0} elements · ${res.nodes ?? 0} nodes · ${res.edges ?? 0} edges`,
-        'success', targetId, wsName,
-      )
+      const res = await publishDocumentsToStore(versionId)
+      await onReloadVersions(); await loadAux()
+      onToast(`Published ${res.published} document${res.published === 1 ? '' : 's'} to the store (tagged _gen)`, 'success')
     } catch (err: unknown) { onToast(err instanceof Error ? err.message : 'Publish failed', 'error') }
     finally { setBusy(false) }
   }
@@ -279,7 +244,7 @@ export default function DatasetsTab({ projectId, versions, onReloadVersions, onS
         ) : (
           <div className="space-y-2">
             {versions.map(v => (
-              <VersionCard key={v.id} version={v} workspaces={workspaces} onPromote={handlePromote} onPublish={handlePublish} onClone={handleClone} onDelete={handleDelete} busy={busy} />
+              <VersionCard key={v.id} version={v} onPromote={handlePromote} onPublish={handlePublish} onClone={handleClone} onDelete={handleDelete} busy={busy} />
             ))}
           </div>
         )}

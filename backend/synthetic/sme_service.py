@@ -18,12 +18,16 @@ from typing import Dict, List, Optional
 
 from . import db
 from .models import (
-    DatasetStatus, RecordStatus, SMEVerdict, SyntheticRecord, VersionImmutableError,
+    DatasetStatus, RecordStatus, SMEVerdict, SyntheticDocument, SyntheticRecord, VersionImmutableError,
 )
+from .storage import get_artifact_store
 
 
 class SMEReviewService:
     """SME sampling + verdict capture + feedback."""
+
+    def __init__(self) -> None:
+        self.store = get_artifact_store()
 
     def sample(self, version_id: str, per_cell_cap: int = 10) -> List[SyntheticRecord]:
         staged = db.list_records(version_id, status=RecordStatus.STAGED)
@@ -86,6 +90,79 @@ class SMEReviewService:
             for r in reviews if r.comment.strip()
         ]
         reviewable = sum(1 for r in staged_plus if r.status in (
+            RecordStatus.STAGED, RecordStatus.SME_APPROVED, RecordStatus.SME_REJECTED,
+        ))
+        return {
+            "version_id": version_id,
+            "reviewable": reviewable,
+            "reviewed": total_reviewed,
+            "by_verdict": dict(by_verdict),
+            "approval_rate": round(approved / denom, 3) if denom else 0.0,
+            "feedback": comments[:50],
+            "complete": reviewable > 0 and total_reviewed >= reviewable,
+        }
+
+    # ==================================================================
+    # Document-level review (document-first pivot)
+    # ==================================================================
+
+    def sample_documents(self, version_id: str) -> List[SyntheticDocument]:
+        """Every staged document goes up for review — run sizes here are small
+        (whole documents, not hundreds of atomic records), so unlike ``sample``
+        there's no stratified sub-sampling."""
+        return db.list_documents(version_id)
+
+    def submit_document_verdict(
+        self, document_id: str, verdict: SMEVerdict, reviewer: str = "sme",
+        corrected_markdown: Optional[str] = None, corrected_title: Optional[str] = None,
+        comment: str = "",
+    ) -> dict:
+        doc = db.get_document(document_id)
+        if doc is None:
+            raise ValueError(f"document {document_id} not found")
+
+        version = db.get_version(doc.version_id) if doc.version_id else None
+        if version and version.status == DatasetStatus.MAIN.value:
+            raise VersionImmutableError(
+                "version is promoted to main and is immutable — clone it to make changes"
+            )
+
+        db.add_document_review(
+            document_id, verdict, reviewer=reviewer,
+            corrected_title=corrected_title, comment=comment,
+        )
+
+        if verdict == SMEVerdict.APPROVE:
+            db.update_document_content(document_id, status=RecordStatus.SME_APPROVED)
+        elif verdict == SMEVerdict.REJECT:
+            db.update_document_content(document_id, status=RecordStatus.SME_REJECTED)
+        elif verdict == SMEVerdict.EDIT:
+            artifact_uri = None
+            if corrected_markdown is not None and version:
+                key = doc.provenance.get("artifact_key") or \
+                    f"{doc.project_id}/{version.dataset_id}/v{version.version_no}/docs/{doc.id}.md"
+                artifact_uri = self.store.put_text(key, corrected_markdown, "text/markdown")
+            db.update_document_content(
+                document_id,
+                title=corrected_title if corrected_title else None,
+                status=RecordStatus.SME_APPROVED,  # an edited document is an accepted document
+                artifact_uri=artifact_uri,
+            )
+        return {"document_id": document_id, "verdict": verdict.value}
+
+    def document_summary(self, version_id: str) -> dict:
+        reviews = db.list_document_reviews(version_id)
+        docs = db.list_documents(version_id)
+        total_reviewed = len({r.document_id for r in reviews})
+        by_verdict = Counter(r.verdict for r in reviews)
+        approved = by_verdict.get(SMEVerdict.APPROVE.value, 0) + by_verdict.get(SMEVerdict.EDIT.value, 0)
+        rejected = by_verdict.get(SMEVerdict.REJECT.value, 0)
+        denom = approved + rejected
+        comments = [
+            {"document_id": r.document_id, "verdict": r.verdict, "comment": r.comment}
+            for r in reviews if r.comment.strip()
+        ]
+        reviewable = sum(1 for d in docs if d.status in (
             RecordStatus.STAGED, RecordStatus.SME_APPROVED, RecordStatus.SME_REJECTED,
         ))
         return {

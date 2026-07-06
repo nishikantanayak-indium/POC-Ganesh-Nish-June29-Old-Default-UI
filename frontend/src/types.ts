@@ -374,6 +374,7 @@ export interface VersionStats {
   documents: number
   distribution: DistributionStats
   published_to?: Publication[]
+  published_to_store?: { count: number; at: string }[]
   cloned_from?: string
   cloned_from_version_no?: number
 }
@@ -385,9 +386,72 @@ export interface SyntheticDocumentT {
   doc_type: string
   title: string
   member_record_ids: string[]
-  sections: { heading: string; record_ids: string[] }[]
+  // `body` = document-first direct generation (real prose per section);
+  // `record_ids` = legacy, parked element-assembled documents.
+  sections: { heading: string; body?: string; record_ids?: string[] }[]
   artifact_uri: string
   status: string
+  provenance?: Record<string, unknown>
+}
+
+// ── Document-first generation (pivot) ───────────────────────────────────────
+
+export interface DocTypeInfo {
+  doc_type: string
+  seed_count: number
+  generated_count: number
+  total: number
+  threshold: number
+  deficit: number
+}
+
+export interface DocTypeOverview {
+  project_id: string
+  min_threshold: number
+  doc_types: DocTypeInfo[]
+}
+
+// One generation target — how many more of this document type, with an
+// optional per-type brief describing what those documents should contain.
+export interface DocGenTarget {
+  doc_type: string
+  count: number
+  brief?: string
+}
+
+export interface DocGenKnobs {
+  industries?: string[]
+  languages?: string[]
+  note?: string
+}
+
+export interface DocSMESummary {
+  version_id: string
+  reviewable: number
+  reviewed: number
+  by_verdict: Record<string, number>
+  approval_rate: number
+  feedback: { document_id: string; verdict: string; comment: string }[]
+  complete: boolean
+}
+
+export interface DocReviewQueue {
+  documents: SyntheticDocumentT[]
+  summary: DocSMESummary
+}
+
+export interface StoreDocument {
+  id: string
+  source_project_id: string
+  source_version_id: string
+  source_document_id: string
+  doc_type: string
+  title: string
+  industry: string
+  language: string
+  tag: string
+  imported_into: { workspace_id: string; at: string }[]
+  published_at: string
 }
 
 export interface StudioVersion {

@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
-import { Network, Upload, GitBranch, Zap, Trash2, ArrowLeft, MessageSquare } from 'lucide-react'
+import { Network, Upload, GitBranch, Zap, Trash2, ArrowLeft, MessageSquare, FlaskConical } from 'lucide-react'
 import { motion } from 'framer-motion'
 import clsx from 'clsx'
 
 import KnowledgeMapLogo from '../components/KnowledgeMapLogo'
 import ThemeToggle from '../components/ThemeToggle'
 import WorkflowPanel from '../components/WorkflowPanel'
+import SyntheticLibraryModal from '../components/SyntheticLibraryModal'
 import KnowledgeGraph from '../components/KnowledgeGraph'
 import ElementsView from '../components/ElementsView'
 import TraceabilityView from '../components/TraceabilityView'
@@ -60,6 +61,7 @@ export default function WorkspacePage() {
   const [graphRefresh, setGraphRefresh] = useState(0)
   const [preloading, setPreloading] = useState(false)
   const [resetConfirm, setResetConfirm] = useState(false)
+  const [showSyntheticLibrary, setShowSyntheticLibrary] = useState(false)
 
   const wsJobs = useWorkspaceJobs(workspaceId)
   const pipelineRunning = wsJobs.some(j => j.status === 'running')
@@ -259,6 +261,10 @@ export default function WorkspacePage() {
       {/* Keep-alive tab content */}
       <main className="flex-1 overflow-hidden relative">
         <div style={tabStyle('ingest')}>
+          <button onClick={() => setShowSyntheticLibrary(true)}
+            className="absolute top-3 right-4 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-primary/30 bg-surface text-primary hover:bg-primary/10">
+            <FlaskConical size={13} /> Add from Synthetic Library
+          </button>
           <WorkflowPanel
             workspaceId={workspaceId}
             workspaceName={workspaceName}
@@ -290,6 +296,14 @@ export default function WorkspacePage() {
 
       <ChatWindow workspaceId={workspaceId} disabled={!hasData} />
       <ToastContainer toasts={toasts} onDismiss={removeToast} />
+      {showSyntheticLibrary && (
+        <SyntheticLibraryModal
+          workspaceId={workspaceId}
+          onClose={() => setShowSyntheticLibrary(false)}
+          onImported={loadData}
+          onToast={addToast}
+        />
+      )}
     </motion.div>
   )
 }

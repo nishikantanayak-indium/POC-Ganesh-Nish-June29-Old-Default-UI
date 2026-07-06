@@ -36,7 +36,7 @@ from core.models import (
     Relationship,
 )
 
-from . import db
+from . import db, taxonomy
 from .generation_service import SyntheticDataGenerationService, _new_id
 from .models import (
     DatasetStatus,
@@ -298,6 +298,140 @@ class SyntheticDatasetManagementService:
         return summary
 
     # ==================================================================
+    # Document-level generation (document-first pivot)
+    # ==================================================================
+
+    def run_document_generation(
+        self,
+        project_id: str,
+        doc_targets: List[dict],   # [{"doc_type": "RFP", "count": 5, "brief": "..."}, ...]
+        knobs: Optional[dict] = None,
+        progress_cb: ProgressCB = _noop,
+    ) -> dict:
+        """
+        Generate whole documents directly — no atomic elements, no LLM
+        validation/quality gating (SME review is the sole quality gate for
+        this flow). Deliberately does not touch ``run_generation`` above,
+        which remains the parked element-level path.
+        """
+        knobs = knobs or {}
+        project = db.get_project(project_id)
+        if project is None:
+            raise ValueError(f"project {project_id} not found")
+
+        industries = knobs.get("industries")
+        languages = knobs.get("languages")
+        seed_docs = (project.seed_summary or {}).get("documents", [])
+
+        dataset = db.get_or_create_default_dataset(project_id)
+        version = db.create_version(project_id, dataset.id, note=knobs.get("note", ""))
+        progress_cb({"stage": "start", "message": f"Version v{version.version_no} created",
+                     "version_id": version.id})
+
+        total_target = sum(int(t["count"]) for t in doc_targets)
+        done = 0
+        documents: List[SyntheticDocument] = []
+        by_doc_type: Dict[str, int] = {}
+
+        for target in doc_targets:
+            dtype = DocumentType(target["doc_type"])
+            count = int(target.get("count", 0))
+            if count <= 0:
+                continue
+            brief = target.get("brief") or ""
+
+            # Reuse any matching seed document's captured examples for tone
+            # conditioning, same convention as mirror-mode in run_generation.
+            seeds: List[str] = []
+            for d in seed_docs:
+                if d.get("type") == dtype.value and d.get("examples"):
+                    for vals in d["examples"].values():
+                        seeds.extend(vals)
+
+            for i in range(count):
+                progress_cb({"stage": "generate", "message": f"Generating {dtype.value} {i + 1}/{count}",
+                             "current": done, "total": total_target, "cell": dtype.value})
+                doc, markdown = self.gen.generate_document(
+                    project_id, dtype, version_id=version.id,
+                    seeds=seeds or None, industries=industries, languages=languages, brief=brief,
+                )
+                key = self._doc_key(project_id, dataset.id, version.version_no, doc.id)
+                doc.artifact_uri = self.store.put_text(key, markdown, "text/markdown")
+                doc.provenance["artifact_key"] = key
+                documents.append(doc)
+                by_doc_type[dtype.value] = by_doc_type.get(dtype.value, 0) + 1
+                done += 1
+                progress_cb({"stage": "generate", "message": f"{dtype.value}: {done}/{total_target} generated",
+                             "current": done, "total": total_target, "cell": dtype.value})
+
+        # ── persist ────────────────────────────────────────────────────
+        progress_cb({"stage": "persist", "message": "Persisting documents"})
+        for d in documents:
+            db.insert_document(d)
+
+        distribution = {
+            dtype.value: {
+                "generated": by_doc_type.get(dtype.value, 0),
+                "threshold": project.min_threshold,
+            }
+            for dtype in taxonomy.DEFAULT_DOC_TYPES
+        }
+        stats = {
+            "requested": total_target,
+            "generated": len(documents),
+            "staged": len(documents),
+            "documents": len(documents),
+            "distribution": distribution,
+        }
+        db.update_version_stats(version.id, stats)
+        db.add_lineage_edges(project_id, [
+            (f"project:{project_id}", f"version:{version.id}", "generated"),
+        ])
+        db.touch_project(project_id)
+
+        summary = {"version_id": version.id, "version_no": version.version_no, **stats}
+        progress_cb({"stage": "complete", "message": "Generation complete", "summary": summary})
+        return summary
+
+    def doc_type_overview(self, project_id: str) -> dict:
+        """Per-document-type gap analysis: how many exist (seed + generated)
+        vs. the project's threshold. The doc-level counterpart to the
+        ElementType×Label matrix overview used by the parked element flow."""
+        project = db.get_project(project_id)
+        if project is None:
+            raise ValueError(f"project {project_id} not found")
+
+        seed_docs = (project.seed_summary or {}).get("documents", [])
+        seed_counts: Dict[str, int] = {}
+        for d in seed_docs:
+            t = d.get("type")
+            if t:
+                seed_counts[t] = seed_counts.get(t, 0) + 1
+
+        generated = db.list_project_documents(
+            project_id,
+            statuses=[RecordStatus.STAGED, RecordStatus.SME_APPROVED, RecordStatus.PUBLISHED],
+        )
+        generated_counts: Dict[str, int] = {}
+        for d in generated:
+            generated_counts[d.doc_type.value] = generated_counts.get(d.doc_type.value, 0) + 1
+
+        types = []
+        for dtype in taxonomy.DEFAULT_DOC_TYPES:
+            seed_count = seed_counts.get(dtype.value, 0)
+            gen_count = generated_counts.get(dtype.value, 0)
+            total = seed_count + gen_count
+            types.append({
+                "doc_type": dtype.value,
+                "seed_count": seed_count,
+                "generated_count": gen_count,
+                "total": total,
+                "threshold": project.min_threshold,
+                "deficit": max(0, project.min_threshold - total),
+            })
+        return {"project_id": project_id, "min_threshold": project.min_threshold, "doc_types": types}
+
+    # ==================================================================
     # Promotion + publication
     # ==================================================================
 
@@ -526,6 +660,51 @@ class SyntheticDatasetManagementService:
         progress_cb({"stage": "complete", "message": "Published to Analysis", "summary": summary})
         return summary
 
+    def publish_documents_to_store(self, version_id: str, progress_cb: ProgressCB = _noop) -> dict:
+        """Push SME-approved (+ staged-but-unreviewed) whole documents into the
+        shared, cross-workspace document store — tagged `_gen`. Does NOT touch
+        any Analysis workspace directly; a workspace pulls from the store on
+        demand via a separate import step (see backend/services/synthetic_import.py)."""
+        version = db.get_version(version_id)
+        if version is None:
+            raise ValueError(f"version {version_id} not found")
+
+        docs = [
+            d for d in db.list_documents(version_id)
+            if d.status in (RecordStatus.SME_APPROVED, RecordStatus.STAGED)
+        ]
+        if not docs:
+            raise ValueError("no accepted documents to publish")
+
+        progress_cb({"stage": "publish", "message": f"Publishing {len(docs)} documents to the store"})
+
+        published = []
+        for doc in docs:
+            key = doc.provenance.get("artifact_key") or self._doc_key(
+                doc.project_id, version.dataset_id, version.version_no, doc.id,
+            )
+            if not self.store.exists(key):
+                # Shouldn't normally happen — generation always writes the artifact —
+                # but fall back to re-rendering so publish never silently drops content.
+                key = self._doc_key(doc.project_id, version.dataset_id, version.version_no, doc.id)
+                self.store.put_text(key, self.document_markdown(version_id, doc.id), "text/markdown")
+            entry = db.publish_document_to_store(doc.project_id, version_id, doc, key)
+            db.update_document_content(doc.id, status=RecordStatus.PUBLISHED)
+            published.append(entry.to_dict())
+
+        stats = version.stats or {}
+        pubs = list(stats.get("published_to_store", []))
+        pubs.append({"count": len(published), "at": datetime.now(timezone.utc).isoformat()})
+        stats["published_to_store"] = pubs
+        db.update_version_stats(version_id, stats)
+        db.add_lineage_edges(version.project_id, [
+            (f"version:{version_id}", "store:documents", "published_to_store"),
+        ])
+
+        summary = {"version_id": version_id, "published": len(published), "documents": published}
+        progress_cb({"stage": "complete", "message": "Published to document store", "summary": summary})
+        return summary
+
     # ==================================================================
     # Lineage + artifacts
     # ==================================================================
@@ -563,14 +742,18 @@ class SyntheticDatasetManagementService:
                     return self.store.get_bytes(key).decode("utf-8")
             except Exception as exc:
                 logger.warning("export md: artifact read failed (%s) — regenerating", exc)
-        # Fallback: rebuild from sections + record texts.
+        # Fallback: rebuild from sections — direct body text (document-level
+        # generation) or, for the legacy element-assembled path, record texts.
         texts = {r.id: r.text for r in db.list_records(version_id)}
         lines = [f"# {doc.title}", ""]
         for s in doc.sections:
             lines.append(f"## {s.get('heading', 'Section')}")
-            for i, rid in enumerate(s.get("record_ids", []), 1):
-                if rid in texts:
-                    lines.append(f"{i}. {texts[rid]}")
+            if s.get("body"):
+                lines.append(s["body"])
+            else:
+                for i, rid in enumerate(s.get("record_ids", []), 1):
+                    if rid in texts:
+                        lines.append(f"{i}. {texts[rid]}")
             lines.append("")
         return "\n".join(lines)
 
@@ -585,9 +768,12 @@ class SyntheticDatasetManagementService:
             d.add_paragraph("Generated to a user brief.").italic = True
         for s in doc.sections:
             d.add_heading(s.get("heading", "Section"), level=1)
-            for rid in s.get("record_ids", []):
-                if rid in texts:
-                    d.add_paragraph(texts[rid], style="List Number")
+            if s.get("body"):
+                d.add_paragraph(s["body"])
+            else:
+                for rid in s.get("record_ids", []):
+                    if rid in texts:
+                        d.add_paragraph(texts[rid], style="List Number")
         buf = io.BytesIO()
         d.save(buf)
         return buf.getvalue()

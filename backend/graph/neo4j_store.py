@@ -83,7 +83,8 @@ class Neo4jGraphStore(IGraphStore):
             "    e.confidence = $confidence, "
             "    e.metadata = $metadata, "
             "    e.section = $section, "
-            "    e.page_number = $page_number"
+            "    e.page_number = $page_number, "
+            "    e.synthetic = $synthetic"
         )
         try:
             with self._driver.session(database=self._db) as s:
@@ -95,6 +96,10 @@ class Neo4jGraphStore(IGraphStore):
                     metadata=str(element.metadata),
                     section=element.metadata.get("section", ""),
                     page_number=element.metadata.get("page_number"),
+                    # A real, queryable boolean (not buried in the stringified
+                    # metadata dict) so synthetic-origin data can be filtered
+                    # in Cypher — e.g. `WHERE e.synthetic = true`.
+                    synthetic=bool(element.metadata.get("synthetic", False)),
                 )
         except Exception as exc:
             raise GraphStoreError(f"Failed to add element '{element.id}': {exc}") from exc
@@ -500,6 +505,8 @@ class Neo4jGraphStore(IGraphStore):
             metadata["section"] = props["section"]
         if props.get("page_number") is not None:
             metadata["page_number"] = props["page_number"]
+        if props.get("synthetic") is not None:
+            metadata["synthetic"] = bool(props["synthetic"])
 
         return AtomicElement(
             id=props["id"],

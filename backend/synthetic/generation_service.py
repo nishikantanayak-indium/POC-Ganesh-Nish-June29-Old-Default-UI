@@ -119,6 +119,36 @@ def _generate_tool(auto_label: bool, allowed_labels: List[str]) -> dict:
         },
     }
 
+def _generate_document_tool() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "emit_document",
+            "description": "Emit one complete, coherent synthetic procurement document.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "industry": {"type": "string"},
+                    "language": {"type": "string"},
+                    "sections": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "heading": {"type": "string"},
+                                "body": {"type": "string"},
+                            },
+                            "required": ["heading", "body"],
+                        },
+                    },
+                },
+                "required": ["title", "sections"],
+            },
+        },
+    }
+
+
 _RELATE_TOOL = {
     "type": "function",
     "function": {
@@ -496,4 +526,85 @@ class SyntheticDataGenerationService:
             status=RecordStatus.STAGED,
             provenance={"assembler": assembler, "record_count": len(records), "brief": bool(brief.strip())},
         )
+        return doc, markdown
+
+    # ------------------------------------------------------------------
+    # Direct whole-document generation (document-level pivot)
+    # ------------------------------------------------------------------
+
+    def generate_document(
+        self,
+        project_id: str,
+        doc_type: DocumentType,
+        version_id: Optional[str] = None,
+        seeds: Optional[List[str]] = None,
+        industries: Optional[List[str]] = None,
+        languages: Optional[List[str]] = None,
+        brief: Optional[str] = None,
+        min_sections: int = 4,
+        max_sections: int = 9,
+    ) -> tuple[SyntheticDocument, str]:
+        """
+        Author one complete, coherent synthetic document directly (no atomic
+        elements as an intermediate step) — the document-level counterpart to
+        ``generate_records`` + ``assemble_document`` combined into a single
+        drafting call.
+        """
+        industries = industries or taxonomy.DEFAULT_INDUSTRIES
+        languages = languages or taxonomy.DEFAULT_LANGUAGES
+
+        seed_block = ""
+        if seeds:
+            seed_block = "\n\nReal reference examples (match their tone/structure, do NOT copy):\n" + \
+                "\n".join(f"- {s[:240]}" for s in seeds[:8])
+        brief_block = ""
+        if brief and brief.strip():
+            brief_block = f"\n\nUSER BRIEF — honour every requirement below in the generated document:\n{brief.strip()}"
+
+        system = (
+            f"You are a senior procurement contract author generating a realistic synthetic "
+            f"{doc_type.value} document for training data.\n"
+            f"Write ONE complete, internally consistent {doc_type.value} with {min_sections}-{max_sections} "
+            f"sections covering the sections a real {doc_type.value} would contain end-to-end.\n"
+            f"Vary industry (pick one from {industries}) and language (pick one from {languages}).\n"
+            "Use authentic legal/contractual drafting conventions throughout — this must read as a whole "
+            "document, not a list of disconnected clauses.\n"
+            "Set 'industry' and 'language' to reflect what you chose."
+        )
+        data = self._call(
+            system, f"Generate one complete {doc_type.value} document." + brief_block + seed_block,
+            _generate_document_tool(), "emit_document",
+            max_tokens=6000, temperature=0.85,
+        )
+        title = str(data.get("title") or f"Synthetic {doc_type.value}").strip()
+        industry = str(data.get("industry") or industries[0])
+        language = str(data.get("language") or languages[0])
+        sections = [
+            {"heading": str(s.get("heading", "Section")), "body": str(s.get("body", "")).strip()}
+            for s in data.get("sections", [])
+            if str(s.get("body", "")).strip()
+        ]
+
+        lines = [f"# {title}", ""]
+        if brief and brief.strip():
+            lines += [f"> Generated to brief: {brief.strip()}", ""]
+        for sec in sections:
+            lines.append(f"## {sec['heading']}")
+            lines.append(sec["body"])
+            lines.append("")
+        markdown = "\n".join(lines)
+
+        doc = SyntheticDocument(
+            id=f"SDOC_{uuid.uuid4().hex[:8].upper()}", project_id=project_id, version_id=version_id,
+            doc_type=doc_type, title=title,
+            member_record_ids=[], sections=sections,
+            status=RecordStatus.STAGED,
+            provenance={
+                "assembler": "direct-generation", "model": self.model,
+                "industry": industry, "language": language,
+                "brief": bool(brief and brief.strip()), "seeds_used": len(seeds or []),
+                "synthetic": True,
+            },
+        )
+        logger.info("Generated document %s (%s, %d sections)", doc.id, doc_type.value, len(sections))
         return doc, markdown

@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import psycopg2
@@ -129,6 +129,51 @@ class SMEReviewRow:
             "verdict": self.verdict, "corrected_label": self.corrected_label,
             "corrected_text": self.corrected_text, "comment": self.comment,
             "created_at": self.created_at.isoformat(),
+        }
+
+
+@dataclass
+class DocumentReviewRow:
+    id: str
+    document_id: str
+    reviewer: str
+    verdict: str
+    corrected_title: Optional[str]
+    comment: str
+    created_at: datetime
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "document_id": self.document_id, "reviewer": self.reviewer,
+            "verdict": self.verdict, "corrected_title": self.corrected_title,
+            "comment": self.comment, "created_at": self.created_at.isoformat(),
+        }
+
+
+@dataclass
+class StoreDocument:
+    id: str
+    source_project_id: str
+    source_version_id: str
+    source_document_id: str
+    doc_type: str
+    title: str
+    artifact_key: str
+    industry: str
+    language: str
+    tag: str
+    imported_into: list
+    published_at: datetime
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "source_project_id": self.source_project_id,
+            "source_version_id": self.source_version_id,
+            "source_document_id": self.source_document_id,
+            "doc_type": self.doc_type, "title": self.title,
+            "industry": self.industry, "language": self.language, "tag": self.tag,
+            "imported_into": self.imported_into,
+            "published_at": self.published_at.isoformat(),
         }
 
 
@@ -273,6 +318,36 @@ def init_synthetic_db() -> None:
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS synthetic_document_reviews (
+                id               TEXT PRIMARY KEY,
+                document_id      TEXT NOT NULL REFERENCES synthetic_documents(id) ON DELETE CASCADE,
+                reviewer         TEXT NOT NULL DEFAULT 'sme',
+                verdict          TEXT NOT NULL,
+                corrected_title  TEXT,
+                comment          TEXT NOT NULL DEFAULT '',
+                created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        # A shared pool of published whole documents, independent of any single
+        # workspace — any Analysis workspace can browse and pull ("import")
+        # from here on demand. Always synthetic in origin, hence `tag`.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS synthetic_document_store (
+                id                 TEXT PRIMARY KEY,
+                source_project_id  TEXT NOT NULL REFERENCES synthetic_projects(id) ON DELETE CASCADE,
+                source_version_id  TEXT NOT NULL REFERENCES synthetic_versions(id) ON DELETE CASCADE,
+                source_document_id TEXT NOT NULL,
+                doc_type           TEXT NOT NULL,
+                title              TEXT NOT NULL,
+                artifact_key       TEXT NOT NULL,
+                industry           TEXT NOT NULL DEFAULT 'General',
+                language           TEXT NOT NULL DEFAULT 'en',
+                tag                TEXT NOT NULL DEFAULT '_gen',
+                imported_into      JSONB NOT NULL DEFAULT '[]',
+                published_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
         for stmt in (
             "CREATE INDEX IF NOT EXISTS idx_syn_ds_project ON synthetic_datasets(project_id)",
             "CREATE INDEX IF NOT EXISTS idx_syn_ver_dataset ON synthetic_versions(dataset_id)",
@@ -282,6 +357,8 @@ def init_synthetic_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_syn_doc_version ON synthetic_documents(version_id)",
             "CREATE INDEX IF NOT EXISTS idx_syn_sme_record ON synthetic_sme_reviews(record_id)",
             "CREATE INDEX IF NOT EXISTS idx_syn_lin_project ON synthetic_lineage(project_id)",
+            "CREATE INDEX IF NOT EXISTS idx_syn_docrev_document ON synthetic_document_reviews(document_id)",
+            "CREATE INDEX IF NOT EXISTS idx_syn_store_doctype ON synthetic_document_store(doc_type)",
         ):
             cur.execute(stmt)
         conn.commit()
@@ -449,8 +526,11 @@ def list_versions(project_id: str) -> List[Version]:
 
 
 def version_status_counts(project_id: str) -> Dict[str, Dict[str, int]]:
-    """Live record-status breakdown per version — reflects SME verdicts as they
-    happen (so the Datasets tab isn't stuck on generation-time counts)."""
+    """Live status breakdown per version — reflects SME verdicts as they
+    happen (so the Datasets tab isn't stuck on generation-time counts).
+    Merges atomic records (parked element-first flow) and whole documents
+    (document-first flow) — a version only ever populates one or the other,
+    so summing is safe."""
     _ensure_init()
     out: Dict[str, Dict[str, int]] = {}
     with _conn() as conn, conn.cursor() as cur:
@@ -460,7 +540,14 @@ def version_status_counts(project_id: str) -> Dict[str, Dict[str, int]]:
             (project_id,),
         )
         for version_id, status, count in cur.fetchall():
-            out.setdefault(version_id, {})[status] = count
+            out.setdefault(version_id, {})[status] = out.setdefault(version_id, {}).get(status, 0) + count
+        cur.execute(
+            "SELECT version_id, status, COUNT(*) FROM synthetic_documents "
+            "WHERE project_id = %s AND version_id IS NOT NULL GROUP BY version_id, status",
+            (project_id,),
+        )
+        for version_id, status, count in cur.fetchall():
+            out.setdefault(version_id, {})[status] = out.setdefault(version_id, {}).get(status, 0) + count
     return out
 
 
@@ -866,3 +953,166 @@ def list_lineage(project_id: str) -> List[dict]:
             }
             for r in cur.fetchall()
         ]
+
+
+# ---------------------------------------------------------------------------
+# Document-level SME reviews (document-first pivot)
+# ---------------------------------------------------------------------------
+
+
+def list_project_documents(
+    project_id: str, statuses: Optional[List[RecordStatus]] = None,
+) -> List[SyntheticDocument]:
+    _ensure_init()
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if statuses:
+            cur.execute(
+                "SELECT * FROM synthetic_documents WHERE project_id = %s AND status = ANY(%s)",
+                (project_id, [s.value for s in statuses]),
+            )
+        else:
+            cur.execute("SELECT * FROM synthetic_documents WHERE project_id = %s", (project_id,))
+        out: List[SyntheticDocument] = []
+        for r in cur.fetchall():
+            d = dict(r)
+            out.append(SyntheticDocument(
+                id=d["id"], project_id=d["project_id"], version_id=d.get("version_id"),
+                doc_type=DocumentType(d["doc_type"]), title=d["title"],
+                member_record_ids=d.get("member_record_ids") or [],
+                sections=d.get("sections") or [], artifact_uri=d.get("artifact_uri", ""),
+                status=RecordStatus(d.get("status", "staged")),
+                provenance=d.get("provenance") or {}, created_at=d.get("created_at"),
+            ))
+        return out
+
+
+def get_document(document_id: str) -> Optional[SyntheticDocument]:
+    _ensure_init()
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM synthetic_documents WHERE id = %s", (document_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        return SyntheticDocument(
+            id=d["id"], project_id=d["project_id"], version_id=d.get("version_id"),
+            doc_type=DocumentType(d["doc_type"]), title=d["title"],
+            member_record_ids=d.get("member_record_ids") or [],
+            sections=d.get("sections") or [], artifact_uri=d.get("artifact_uri", ""),
+            status=RecordStatus(d.get("status", "staged")),
+            provenance=d.get("provenance") or {}, created_at=d.get("created_at"),
+        )
+
+
+def update_document_content(
+    document_id: str, title: Optional[str] = None, status: Optional[RecordStatus] = None,
+    artifact_uri: Optional[str] = None,
+) -> None:
+    """Apply an SME edit / status change to a whole document. The corrected
+    markdown itself is written to the artifact store by the caller (mirroring
+    how generation writes it); this just updates the pointer + metadata."""
+    _ensure_init()
+    sets, params = [], []
+    if title is not None:
+        sets.append("title = %s"); params.append(title)
+    if status is not None:
+        sets.append("status = %s"); params.append(status.value)
+    if artifact_uri is not None:
+        sets.append("artifact_uri = %s"); params.append(artifact_uri)
+    if not sets:
+        return
+    params.append(document_id)
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(f"UPDATE synthetic_documents SET {', '.join(sets)} WHERE id = %s", params)
+        conn.commit()
+
+
+def add_document_review(
+    document_id: str, verdict: SMEVerdict, reviewer: str = "sme",
+    corrected_title: Optional[str] = None, comment: str = "",
+) -> DocumentReviewRow:
+    _ensure_init()
+    rid = str(uuid.uuid4())
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """INSERT INTO synthetic_document_reviews
+               (id, document_id, reviewer, verdict, corrected_title, comment)
+               VALUES (%s,%s,%s,%s,%s,%s) RETURNING *""",
+            (rid, document_id, reviewer, verdict.value, corrected_title, comment),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return DocumentReviewRow(**dict(row))
+
+
+def list_document_reviews(version_id: str) -> List[DocumentReviewRow]:
+    _ensure_init()
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """SELECT s.* FROM synthetic_document_reviews s
+               JOIN synthetic_documents d ON d.id = s.document_id
+               WHERE d.version_id = %s ORDER BY s.created_at""",
+            (version_id,),
+        )
+        return [DocumentReviewRow(**dict(r)) for r in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Shared document store (cross-workspace, document-first pivot)
+# ---------------------------------------------------------------------------
+
+
+def publish_document_to_store(
+    source_project_id: str, source_version_id: str, doc: SyntheticDocument, artifact_key: str,
+) -> StoreDocument:
+    _ensure_init()
+    sid = str(uuid.uuid4())
+    industry = doc.provenance.get("industry", "General")
+    language = doc.provenance.get("language", "en")
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """INSERT INTO synthetic_document_store
+               (id, source_project_id, source_version_id, source_document_id, doc_type,
+                title, artifact_key, industry, language)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+            (sid, source_project_id, source_version_id, doc.id, doc.doc_type.value,
+             doc.title, artifact_key, industry, language),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return StoreDocument(**dict(row))
+
+
+def list_store_documents(doc_type: Optional[str] = None) -> List[StoreDocument]:
+    _ensure_init()
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if doc_type:
+            cur.execute(
+                "SELECT * FROM synthetic_document_store WHERE doc_type = %s ORDER BY published_at DESC",
+                (doc_type,),
+            )
+        else:
+            cur.execute("SELECT * FROM synthetic_document_store ORDER BY published_at DESC")
+        return [StoreDocument(**dict(r)) for r in cur.fetchall()]
+
+
+def get_store_document(store_document_id: str) -> Optional[StoreDocument]:
+    _ensure_init()
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM synthetic_document_store WHERE id = %s", (store_document_id,))
+        row = cur.fetchone()
+        return StoreDocument(**dict(row)) if row else None
+
+
+def mark_store_document_imported(store_document_id: str, workspace_id: str) -> None:
+    _ensure_init()
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT imported_into FROM synthetic_document_store WHERE id = %s", (store_document_id,))
+        row = cur.fetchone()
+        imports = list(row["imported_into"]) if row and row["imported_into"] else []
+        imports.append({"workspace_id": workspace_id, "at": datetime.now(timezone.utc).isoformat()})
+        cur.execute(
+            "UPDATE synthetic_document_store SET imported_into = %s WHERE id = %s",
+            (json.dumps(imports), store_document_id),
+        )
+        conn.commit()
