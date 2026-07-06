@@ -705,6 +705,44 @@ class SyntheticDatasetManagementService:
         progress_cb({"stage": "complete", "message": "Published to document store", "summary": summary})
         return summary
 
+    def publish_documents(self, document_ids: List[str]) -> dict:
+        """Publish an explicit set of documents by id — the professional-UI
+        Document Library's "Send to Document Storage" action. Version-agnostic:
+        each document's version is resolved internally purely to reconstruct
+        its artifact key, never surfaced to the caller."""
+        if not document_ids:
+            raise ValueError("no documents selected")
+
+        published = []
+        by_project: Dict[str, List[str]] = {}
+        for doc_id in document_ids:
+            doc = db.get_document(doc_id)
+            if doc is None:
+                raise ValueError(f"document {doc_id} not found")
+            if doc.status != RecordStatus.SME_APPROVED:
+                raise ValueError(f"document {doc_id} must be approved before publishing")
+            version = db.get_version(doc.version_id) if doc.version_id else None
+            if version is None:
+                raise ValueError(f"document {doc_id} has no associated version")
+
+            key = doc.provenance.get("artifact_key") or self._doc_key(
+                doc.project_id, version.dataset_id, version.version_no, doc.id,
+            )
+            if not self.store.exists(key):
+                key = self._doc_key(doc.project_id, version.dataset_id, version.version_no, doc.id)
+                self.store.put_text(key, self.document_markdown(doc.version_id, doc.id), "text/markdown")
+            entry = db.publish_document_to_store(doc.project_id, doc.version_id, doc, key)
+            db.update_document_content(doc.id, status=RecordStatus.PUBLISHED)
+            published.append(entry.to_dict())
+            by_project.setdefault(doc.project_id, []).append(doc.id)
+
+        for project_id, ids in by_project.items():
+            db.add_lineage_edges(project_id, [
+                (f"document:{d}", "store:documents", "published_to_store") for d in ids
+            ])
+
+        return {"published": len(published), "documents": published}
+
     # ==================================================================
     # Lineage + artifacts
     # ==================================================================

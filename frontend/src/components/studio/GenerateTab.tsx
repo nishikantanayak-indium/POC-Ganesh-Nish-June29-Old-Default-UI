@@ -18,7 +18,7 @@ interface Props {
   projectId: string
   overview: StudioOverview | null
   onReloadOverview: () => Promise<void>
-  onGenerationComplete: (versionId: string) => void
+  onGenerationComplete: () => void
   onToast: (msg: string, type: 'success' | 'error') => void
 }
 
@@ -106,7 +106,7 @@ export default function GenerateTab({
         setRunning(false)
         setCounts({}); setBriefs({})
         reloadDocOverview()
-        setSummary(s => { if (s?.version_id) onGenerationComplete(s.version_id); return s })
+        onGenerationComplete()
       },
       (err) => { setRunning(false); onToast(err, 'error') },
     )
@@ -239,14 +239,14 @@ export default function GenerateTab({
           )}
         </section>
 
-        {/* ── 3 · Result + SME CTA ──────────────────────────────────── */}
+        {/* ── 3 · Result + Review CTA ──────────────────────────────────── */}
         <AnimatePresence>
           {summary && !running && (
             <motion.section initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
               className="rounded-2xl border border-success/30 bg-success/[0.04] p-5">
               <div className="flex items-center gap-2 mb-3">
                 <CheckCircle2 size={16} className="text-success" />
-                <h3 className="text-sm font-semibold text-foreground">Version {summary.version_no} staged</h3>
+                <h3 className="text-sm font-semibold text-foreground">{summary.documents} document{summary.documents === 1 ? '' : 's'} generated</h3>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
                 <Stat label="Documents" value={summary.documents} tone="success" />
@@ -259,9 +259,9 @@ export default function GenerateTab({
                 <UserCheck size={18} className="text-primary shrink-0 mt-0.5" />
                 <div className="flex-1">
                   <p className="text-sm font-medium text-foreground">Review before publishing</p>
-                  <p className="text-xs text-muted mt-0.5">SME review is the only quality gate in this flow — study each document before it's published.</p>
+                  <p className="text-xs text-muted mt-0.5">Review is the only quality gate in this flow — study each document before it's sent to storage.</p>
                 </div>
-                <button onClick={() => navigate(`/studio/project/${projectId}/sme`)}
+                <button onClick={() => navigate(`/studio/project/${projectId}/review`)}
                   className="shrink-0 py-2 px-4 rounded-lg text-sm font-semibold bg-primary text-white hover:bg-primary/90">Review now</button>
               </div>
             </motion.section>

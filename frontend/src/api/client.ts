@@ -405,6 +405,35 @@ export async function fetchDocTypeOverview(projectId: string): Promise<DocTypeOv
   return r.json()
 }
 
+// Project-scoped document endpoints — the professional-UI Review/Library tabs
+// never expose a version concept, so these operate purely on document ids.
+
+export async function fetchProjectDocuments(projectId: string): Promise<SyntheticDocumentT[]> {
+  const r = await fetch(`${studio}/projects/${projectId}/documents`)
+  if (!r.ok) throw new Error(await r.text())
+  return (await r.json()).documents
+}
+
+export async function submitDocumentVerdict(
+  documentId: string,
+  body: { verdict: string; corrected_markdown?: string; corrected_title?: string; comment?: string },
+): Promise<{ document_id: string; verdict: string }> {
+  const r = await fetch(`${studio}/documents/${documentId}/verdict`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function publishDocuments(documentIds: string[]): Promise<{ published: number }> {
+  const r = await fetch(`${studio}/documents/publish`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ document_ids: documentIds }),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
 export function streamGenerateDocuments(
   projectId: string,
   docTargets: DocGenTarget[],

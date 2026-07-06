@@ -277,6 +277,15 @@ async def doc_overview(project_id: str) -> dict:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@router.get("/projects/{project_id}/documents")
+async def project_documents(project_id: str) -> dict:
+    """Every document in the project, regardless of which internal generation
+    run it came from — the UI never exposes that grouping (no version/staging
+    language), so this is project-scoped rather than version-scoped."""
+    docs = await asyncio.to_thread(db.list_project_documents, project_id)
+    return {"documents": [d.to_dict() for d in docs]}
+
+
 # ---------------------------------------------------------------------------
 # Generate (SSE)
 # ---------------------------------------------------------------------------
@@ -526,6 +535,36 @@ async def sme_documents_verdict(version_id: str, body: DocVerdictBody) -> dict:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+class DocumentVerdictBody(BaseModel):
+    verdict: str
+    corrected_markdown: Optional[str] = None
+    corrected_title: Optional[str] = None
+    comment: str = ""
+    reviewer: str = "sme"
+
+
+@router.post("/documents/{document_id}/verdict")
+async def document_verdict(document_id: str, body: DocumentVerdictBody) -> dict:
+    """Version-agnostic verdict submission — the professional-UI Review tab
+    never knows a version id; ``submit_document_verdict`` already resolves
+    everything it needs (immutability check, artifact key) from the document
+    itself, so this is a thin wrapper with the version dropped from the URL."""
+    sme = get_sme_service()
+    try:
+        verdict = SMEVerdict(body.verdict)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"invalid verdict '{body.verdict}'")
+    try:
+        return await asyncio.to_thread(
+            sme.submit_document_verdict, document_id, verdict, body.reviewer,
+            body.corrected_markdown, body.corrected_title, body.comment,
+        )
+    except VersionImmutableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @router.get("/versions/{version_id}/sme/documents/summary")
 async def sme_documents_summary(version_id: str) -> dict:
     sme = get_sme_service()
@@ -641,6 +680,22 @@ async def publish_to_store(version_id: str) -> dict:
     ds = get_dataset_service()
     try:
         return await asyncio.to_thread(ds.publish_documents_to_store, version_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+class PublishDocumentsBody(BaseModel):
+    document_ids: List[str]
+
+
+@router.post("/documents/publish")
+async def publish_documents(body: PublishDocumentsBody) -> dict:
+    """Send an explicit set of approved documents to the document store —
+    the Document Library's "Send to Document Storage" action. Version-agnostic,
+    unlike ``publish-to-store`` above (which the professional UI no longer uses)."""
+    ds = get_dataset_service()
+    try:
+        return await asyncio.to_thread(ds.publish_documents, body.document_ids)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

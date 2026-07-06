@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
-import { ArrowLeft, FlaskConical, Sparkles, UserCheck, Database } from 'lucide-react'
+import { ArrowLeft, FlaskConical, Sparkles, UserCheck, LibraryBig } from 'lucide-react'
 import { motion } from 'framer-motion'
 import clsx from 'clsx'
 
@@ -13,17 +13,19 @@ import GenerateTab from '../components/studio/GenerateTab'
 // UI for now. Re-add to TABS + the render block below to bring them back.
 // import ValidateTab from '../components/studio/ValidateTab'
 // import QualityTab from '../components/studio/QualityTab'
-import SMEReviewTab from '../components/studio/SMEReviewTab'
-import DatasetsTab from '../components/studio/DatasetsTab'
+import ReviewTab from '../components/studio/SMEReviewTab'
+import DocumentLibraryTab from '../components/studio/DocumentLibraryTab'
 import { fetchStudioMeta, fetchProject, fetchOverview, fetchVersions } from '../api/client'
-import type { StudioMeta, StudioProject, StudioOverview, StudioVersion } from '../types'
+import type { StudioMeta, StudioProject, StudioOverview } from '../types'
 
-type Tab = 'generate' | 'sme' | 'datasets'
+// No version/staging/main language anywhere in this page — every generated
+// document just flows Draft → In Review → Approved/Rejected → Published.
+type Tab = 'generate' | 'review' | 'library'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: 'generate',  label: 'Generate',    icon: <Sparkles size={14} /> },
-  { id: 'sme',       label: 'SME Review',  icon: <UserCheck size={14} /> },
-  { id: 'datasets',  label: 'Datasets',    icon: <Database size={14} /> },
+  { id: 'generate', label: 'Generate', icon: <Sparkles size={14} /> },
+  { id: 'review',   label: 'Review',   icon: <UserCheck size={14} /> },
+  { id: 'library',  label: 'Documents', icon: <LibraryBig size={14} /> },
 ]
 
 export default function StudioProjectPage() {
@@ -38,45 +40,35 @@ export default function StudioProjectPage() {
   const [meta, setMeta] = useState<StudioMeta | null>(null)
   const [project, setProject] = useState<StudioProject | null>(null)
   const [overview, setOverview] = useState<StudioOverview | null>(null)
-  const [versions, setVersions] = useState<StudioVersion[]>([])
-  const [activeVersionId, setActiveVersionId] = useState<string | null>(null)
+  // Only used to gate "has anything been generated yet?" — never rendered.
+  const [hasGenerated, setHasGenerated] = useState(false)
   const { toasts, addToast, removeToast } = useToast()
 
   const reloadOverview = useCallback(async () => {
     try { setOverview(await fetchOverview(projectId)) } catch { /* ignore */ }
   }, [projectId])
 
-  const reloadVersions = useCallback(async () => {
-    try {
-      const vs = await fetchVersions(projectId)
-      setVersions(vs)
-      setActiveVersionId(prev => prev && vs.some(v => v.id === prev) ? prev : (vs[0]?.id ?? null))
-    } catch { /* ignore */ }
+  const checkHasGenerated = useCallback(async () => {
+    try { setHasGenerated((await fetchVersions(projectId)).length > 0) } catch { /* ignore */ }
   }, [projectId])
 
   useEffect(() => {
     fetchStudioMeta().then(setMeta).catch(() => {})
     fetchProject(projectId).then(setProject).catch(() => {})
     reloadOverview()
-    reloadVersions()
-  }, [projectId, reloadOverview, reloadVersions])
+    checkHasGenerated()
+  }, [projectId, reloadOverview, checkHasGenerated])
 
   const changeTab = useCallback((next: Tab) => {
     navigate(`/studio/project/${projectId}/${next}`)
     setVisited(prev => prev.has(next) ? prev : new Set([...prev, next]))
-    // Datasets shows live per-version review counts — refresh on entry so SME
-    // verdicts made in the SME tab are reflected here.
-    if (next === 'datasets') reloadVersions()
-  }, [navigate, projectId, reloadVersions])
+  }, [navigate, projectId])
 
-  // When a generation completes, refresh everything and jump the user to Validate.
-  const onGenerationComplete = useCallback(async (newVersionId: string) => {
-    await Promise.all([reloadOverview(), reloadVersions()])
-    setActiveVersionId(newVersionId)
-    addToast('Generation complete — records staged', 'success')
-  }, [reloadOverview, reloadVersions, addToast])
+  const onGenerationComplete = useCallback(async () => {
+    await Promise.all([reloadOverview(), checkHasGenerated()])
+    addToast('Documents generated — ready for review', 'success')
+  }, [reloadOverview, checkHasGenerated, addToast])
 
-  const activeVersion = versions.find(v => v.id === activeVersionId) ?? null
   const tabStyle = (t: Tab): React.CSSProperties => ({
     position: 'absolute', inset: 0, display: tab === t ? 'block' : 'none', overflow: 'hidden',
   })
@@ -94,30 +86,21 @@ export default function StudioProjectPage() {
           <div className="flex items-center gap-2.5">
             <div className="w-6 h-6 rounded-lg bg-primary flex items-center justify-center"><FlaskConical size={13} className="text-white" /></div>
             <span className="font-semibold text-foreground text-sm tracking-tight">{project?.name ?? 'Studio'}</span>
-            {project && <span className="text-xs text-muted font-mono">· threshold {project.min_threshold}</span>}
+            {project && (
+              <span className="text-xs text-muted font-mono cursor-help"
+                title="Minimum documents per type. Used by the Generate tab's gap analysis.">
+                · target {project.min_threshold}/type
+              </span>
+            )}
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          {versions.length > 0 && (
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-muted">Version</span>
-              <select value={activeVersionId ?? ''} onChange={e => setActiveVersionId(e.target.value)}
-                className="bg-card border border-border rounded-lg px-2 py-1 text-foreground font-mono focus:outline-none focus:border-primary">
-                {versions.map(v => (
-                  <option key={v.id} value={v.id}>v{v.version_no} · {v.status}</option>
-                ))}
-              </select>
-            </div>
-          )}
-          <ThemeToggle />
-        </div>
+        <ThemeToggle />
       </header>
 
       {/* Tabs */}
       <nav className="flex items-center gap-1 px-6 pt-3 pb-0 border-b border-border bg-surface shrink-0">
         {TABS.map(t => {
-          const disabled = t.id !== 'generate' && versions.length === 0
-          const badge = t.id === 'datasets' && versions.length > 0 ? versions.length : undefined
+          const disabled = t.id !== 'generate' && !hasGenerated
           return (
             <button key={t.id} onClick={() => !disabled && changeTab(t.id)} disabled={disabled}
               style={{
@@ -127,9 +110,6 @@ export default function StudioProjectPage() {
               className={clsx('flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-all border-b-2 -mb-px',
                 disabled ? 'cursor-not-allowed' : 'hover:brightness-125')}>
               {t.icon}{t.label}
-              {badge !== undefined && (
-                <span className="ml-1 px-1.5 py-0.5 rounded-full bg-primary/20 text-primary text-xs font-mono">{badge}</span>
-              )}
             </button>
           )
         })}
@@ -144,15 +124,14 @@ export default function StudioProjectPage() {
             onToast={addToast}
           />
         </div>
-        {visited.has('sme') && (
-          <div style={tabStyle('sme')}>
-            <SMEReviewTab version={activeVersion} onToast={addToast} />
+        {visited.has('review') && (
+          <div style={tabStyle('review')}>
+            <ReviewTab projectId={projectId} onToast={addToast} />
           </div>
         )}
-        {visited.has('datasets') && (
-          <div style={tabStyle('datasets')}>
-            <DatasetsTab projectId={projectId} versions={versions}
-              onReloadVersions={reloadVersions} onSelectVersion={setActiveVersionId} onToast={addToast} />
+        {visited.has('library') && (
+          <div style={tabStyle('library')}>
+            <DocumentLibraryTab projectId={projectId} onToast={addToast} />
           </div>
         )}
       </main>
