@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Check, X, Pencil, ShieldCheck, Undo2 } from 'lucide-react'
+import { Check, ChevronDown, Download, X, Pencil, ShieldCheck, Undo2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { PUBLISHED_STYLE, SME_VERDICT_STYLES } from '@/lib/domain-taxonomy'
@@ -10,6 +10,7 @@ import type { RecordStatus, SMEVerdict, StudioVersion, SyntheticDocumentT } from
 import {
   exportDocDocxUrl,
   exportDocMarkdownUrl,
+  exportDocumentsZipUrl,
   getSmeDocumentsQueue,
   listVersions,
   publishDocuments,
@@ -19,6 +20,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -46,6 +48,37 @@ const FILTERS: { key: FilterKey; label: string }[] = [
 // `ms` so quick local responses still read as a deliberate action, not a flash.
 function withMinDelay<T>(promise: Promise<T>, ms = 350): Promise<T> {
   return Promise.all([promise, new Promise((r) => setTimeout(r, ms))]).then(([result]) => result)
+}
+
+// Individual documents, zipped — no records/relationships/manifest bundled in.
+function DownloadDocumentsMenu({
+  versionId,
+  docIds,
+  label,
+}: {
+  versionId: string
+  docIds?: string[]
+  label: string
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm">
+          <Download className="h-3.5 w-3.5" />
+          {label}
+          <ChevronDown className="h-3.5 w-3.5" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem asChild>
+          <a href={exportDocumentsZipUrl(versionId, docIds, 'md')}>as Markdown (.zip)</a>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <a href={exportDocumentsZipUrl(versionId, docIds, 'docx')}>as Word (.zip)</a>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
 }
 
 function sortVersionsDesc(versions: StudioVersion[]): StudioVersion[] {
@@ -283,6 +316,9 @@ export function SMEReviewTab({ projectId }: SMEReviewTabProps) {
               {summary.edited} edited
             </Badge>
             <Badge variant="outline">{summary.pending} pending</Badge>
+            {versionId && documents.length > 0 && (
+              <DownloadDocumentsMenu versionId={versionId} label="Download all" />
+            )}
           </div>
         )}
       </div>
@@ -297,18 +333,25 @@ export function SMEReviewTab({ projectId }: SMEReviewTabProps) {
         </TabsList>
       </Tabs>
 
-      {selectedIds.size > 0 && (
+      {selectedIds.size > 0 && versionId && (
         <div className="flex items-center justify-between rounded-md border border-accent-200 bg-accent-50 px-4 py-2.5 dark:border-accent-800 dark:bg-accent-900/20">
           <span className="text-sm font-medium text-accent-800 dark:text-accent-200">
             {selectedIds.size} document{selectedIds.size === 1 ? '' : 's'} selected
           </span>
-          <Button
-            size="sm"
-            loading={publishMutation.isPending}
-            onClick={() => publishMutation.mutate([...selectedIds])}
-          >
-            Publish {selectedIds.size} selected
-          </Button>
+          <div className="flex items-center gap-2">
+            <DownloadDocumentsMenu
+              versionId={versionId}
+              docIds={[...selectedIds]}
+              label={`Download ${selectedIds.size} selected`}
+            />
+            <Button
+              size="sm"
+              loading={publishMutation.isPending}
+              onClick={() => publishMutation.mutate([...selectedIds])}
+            >
+              Publish {selectedIds.size} selected
+            </Button>
+          </div>
         </div>
       )}
 

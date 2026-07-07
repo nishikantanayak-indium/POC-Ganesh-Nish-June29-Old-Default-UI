@@ -843,6 +843,32 @@ class SyntheticDatasetManagementService:
         d.save(buf)
         return buf.getvalue()
 
+    def export_documents_zip(
+        self, version_id: str, doc_ids: Optional[List[str]] = None, fmt: str = "md",
+    ) -> bytes:
+        """A lean ZIP of just the documents themselves (.md or .docx) — no
+        records.jsonl/relationships.jsonl/manifest.json. ``doc_ids`` narrows
+        to a specific selection; omit it to include every document in the
+        version."""
+        all_docs = db.list_documents(version_id)
+        docs = [d for d in all_docs if d.id in set(doc_ids)] if doc_ids else all_docs
+        if not docs:
+            raise ValueError("no documents to export")
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            seen_names: Dict[str, int] = {}
+            for d in docs:
+                safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in d.title)[:60] or d.id
+                n = seen_names.get(safe, 0)
+                seen_names[safe] = n + 1
+                name = safe if n == 0 else f"{safe}_{n}"
+                if fmt == "docx":
+                    z.writestr(f"{name}.docx", self.document_docx(version_id, d.id))
+                else:
+                    z.writestr(f"{name}.md", self.document_markdown(version_id, d.id))
+        return buf.getvalue()
+
     def export_bundle_zip(self, version_id: str) -> bytes:
         """A single ZIP: records + relationships JSONL, every draft doc (.md),
         and a manifest.json (version stats + project + lineage)."""

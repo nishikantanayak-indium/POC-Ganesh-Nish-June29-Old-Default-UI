@@ -171,6 +171,11 @@ export const getStoreDocuments = (docType?: string) =>
 export const exportRecordsUrl = (versionId: string) => `${base}/versions/${versionId}/export/records.jsonl`
 export const exportRelationshipsUrl = (versionId: string) => `${base}/versions/${versionId}/export/relationships.jsonl`
 export const exportBundleUrl = (versionId: string) => `${base}/versions/${versionId}/export/bundle.zip`
+export const exportDocumentsZipUrl = (versionId: string, docIds?: string[], format: 'md' | 'docx' = 'md') => {
+  const params = new URLSearchParams({ format })
+  if (docIds && docIds.length > 0) params.set('doc_ids', docIds.join(','))
+  return `${base}/versions/${versionId}/export/documents.zip?${params.toString()}`
+}
 export const exportDocMarkdownUrl = (versionId: string, docId: string) =>
   `${base}/versions/${versionId}/documents/${docId}/export.md`
 export const exportDocDocxUrl = (versionId: string, docId: string) =>

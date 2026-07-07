@@ -639,6 +639,22 @@ async def export_bundle(version_id: str) -> Response:
     return _attach(data, f"{version_id[:8]}-bundle.zip", "application/zip")
 
 
+@router.get("/versions/{version_id}/export/documents.zip")
+async def export_documents(
+    version_id: str, doc_ids: Optional[str] = None, format: str = "md",
+) -> Response:
+    """Lean ZIP of just the documents themselves — no records/relationships/
+    manifest. ``doc_ids`` is a comma-separated list to narrow the selection;
+    omit it to export every document in the version. ``format`` is 'md' or 'docx'."""
+    ds = get_dataset_service()
+    ids = [d.strip() for d in doc_ids.split(",") if d.strip()] if doc_ids else None
+    try:
+        data = await asyncio.to_thread(ds.export_documents_zip, version_id, ids, format)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return _attach(data, f"{version_id[:8]}-documents.zip", "application/zip")
+
+
 @router.get("/versions/{version_id}/documents/{doc_id}/export.md")
 async def export_doc_md(version_id: str, doc_id: str) -> Response:
     ds = get_dataset_service()
