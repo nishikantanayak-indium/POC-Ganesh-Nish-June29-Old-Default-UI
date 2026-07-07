@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Copy, Download, Check } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -129,12 +130,13 @@ export function DocumentViewer({
                   '[&_a]:text-accent-600 [&_a]:underline dark:[&_a]:text-accent-400',
                   '[&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:italic dark:[&_blockquote]:border-border-dark',
                   '[&_code]:rounded [&_code]:bg-surface-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[13px] dark:[&_code]:bg-surface-dark-muted',
-                  '[&_table]:w-full [&_table]:border-collapse [&_table]:text-sm',
-                  '[&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1 dark:[&_th]:border-border-dark',
-                  '[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 dark:[&_td]:border-border-dark',
+                  '[&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_table]:text-sm',
+                  '[&_thead]:bg-surface-muted dark:[&_thead]:bg-surface-dark-muted',
+                  '[&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold dark:[&_th]:border-border-dark',
+                  '[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1.5 dark:[&_td]:border-border-dark',
                 )}
               >
-                <ReactMarkdown>{section.body}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{section.body}</ReactMarkdown>
               </div>
             </div>
           ))}
