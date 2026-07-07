@@ -205,9 +205,9 @@ export function validationScoreStyle(score: number | null | undefined): Swatch {
 }
 
 export const VALIDATION_VERDICT_STYLES: Record<'strong' | 'partial' | 'weak', Swatch> = {
-  strong: VALIDATION_SCORE_STYLES.high,
-  partial: VALIDATION_SCORE_STYLES.medium,
-  weak: VALIDATION_SCORE_STYLES.low,
+  strong: { ...VALIDATION_SCORE_STYLES.high, label: 'Strong' },
+  partial: { ...VALIDATION_SCORE_STYLES.medium, label: 'Partial' },
+  weak: { ...VALIDATION_SCORE_STYLES.low, label: 'Weak' },
 }
 
 export function validationVerdictStyle(verdict: 'strong' | 'partial' | 'weak'): Swatch {

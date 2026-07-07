@@ -84,6 +84,8 @@ function EvidenceRow({ item }: { item: ValidationEvidence }) {
 }
 
 function DimensionCard({ dimKey, dim }: { dimKey: DimensionKey; dim: ValidationDimension }) {
+  const [showReference, setShowReference] = useState(false)
+
   if (!dim.applicable) {
     return (
       <div className="rounded-md border border-border bg-surface-subtle p-3 text-xs text-ink-subtle dark:border-border-dark dark:bg-surface-dark-subtle">
@@ -96,6 +98,7 @@ function DimensionCard({ dimKey, dim }: { dimKey: DimensionKey; dim: ValidationD
   const score = dim.score ?? 0
   const style = validationScoreStyle(score)
   const pct = Math.round(score * 100)
+  const evidenceCount = dim.evidence?.length ?? 0
 
   return (
     <Card className="border-border/80">
@@ -110,12 +113,40 @@ function DimensionCard({ dimKey, dim }: { dimKey: DimensionKey; dim: ValidationD
           <div className={cn('h-full rounded-full', style.dotClass)} style={{ width: `${pct}%` }} />
         </div>
         {dim.summary && <p className="text-xs text-ink-muted dark:text-ink-subtle">{dim.summary}</p>}
-        {dim.evidence && dim.evidence.length > 0 && (
+
+        {dim.thin_evidence && (
+          <div className="flex items-start gap-1.5 rounded-md border border-warning-200 bg-warning-50 p-2 text-xs text-warning-700 dark:border-warning-700/40 dark:bg-warning-700/10 dark:text-warning-400">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>This score cites fewer evidence items than the checkable reference material — treat it as less substantiated.</span>
+          </div>
+        )}
+
+        {dim.reference && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowReference((v) => !v)}
+              className="flex items-center gap-1 text-xs font-medium text-ink-muted hover:text-ink dark:text-ink-subtle dark:hover:text-ink-inverted"
+            >
+              {showReference ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+              What the LLM checked this against
+            </button>
+            {showReference && (
+              <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-surface-subtle p-2.5 text-xs text-ink-muted dark:border-border-dark dark:bg-surface-dark-subtle dark:text-ink-subtle">
+                {dim.reference}
+              </pre>
+            )}
+          </div>
+        )}
+
+        {evidenceCount > 0 ? (
           <div className="space-y-2 pt-1">
-            {dim.evidence.map((e, i) => (
+            {dim.evidence!.map((e, i) => (
               <EvidenceRow key={i} item={e} />
             ))}
           </div>
+        ) : (
+          <p className="text-xs text-ink-subtle">No individual evidence items were returned for this dimension.</p>
         )}
       </CardContent>
     </Card>

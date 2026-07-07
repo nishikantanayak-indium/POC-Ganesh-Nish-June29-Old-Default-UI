@@ -140,6 +140,14 @@ export interface ValidationDimension {
   score?: number
   summary?: string
   evidence?: ValidationEvidence[]
+  // The actual reference material (brief/note text, structural template, or deal
+  // facts) the LLM was given to judge against — shown so reviewers can verify the
+  // score against real input, not just trust a number.
+  reference?: string | null
+  // True when the model returned fewer evidence items than the checkable reference
+  // material warranted (e.g. a 3-requirement brief with only 1 evidence item) — a
+  // signal that this score may be under-substantiated.
+  thin_evidence?: boolean
 }
 
 export interface ValidationReport {

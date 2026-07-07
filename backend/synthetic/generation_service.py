@@ -203,13 +203,15 @@ def _validate_document_tool(dimensions: List[str]) -> dict:
             "aspect": {"type": "string"},
             "quote": {
                 "type": "string",
-                "description": "A verbatim substring copied from the document text supporting this "
-                                "judgment. Empty string if verdict is 'weak' and nothing supports it. "
-                                "Never invent or paraphrase a quote — copy it exactly.",
+                "description": "A verbatim substring copied from the DOCUMENT text supporting this "
+                                "judgment. REQUIRED (non-empty) whenever verdict is 'strong' or 'partial' "
+                                "— a confident verdict with no quote is not acceptable. Empty string is "
+                                "only valid when verdict is 'weak' and nothing in the document supports "
+                                "the claim. Never invent or paraphrase a quote — copy it exactly.",
             },
             "verdict": {"type": "string", "enum": ["strong", "partial", "weak"]},
         },
-        "required": ["aspect", "verdict"],
+        "required": ["aspect", "quote", "verdict"],
     }
     dim_props = {}
     for dim in dimensions:
@@ -219,7 +221,7 @@ def _validate_document_tool(dimensions: List[str]) -> dict:
             "properties": {
                 "score": {"type": "number", "minimum": 0, "maximum": 1},
                 "summary": {"type": "string"},
-                "evidence": {"type": "array", "items": evidence_item},
+                "evidence": {"type": "array", "items": evidence_item, "minItems": 1},
             },
             "required": ["score", "summary", "evidence"],
         }
@@ -840,42 +842,64 @@ class SyntheticDataGenerationService:
         if deal_context is not None:
             dimensions.append("deal_consistency")
 
-        reference_blocks: List[str] = []
+        reference_by_dim: Dict[str, str] = {}
+        min_evidence_by_dim: Dict[str, int] = {"realism": 2}
         if "structural_fidelity" in dimensions:
             if structure_hint.full_text:
-                reference_blocks.append(
-                    f"STRUCTURAL TEMPLATE this document was asked to mirror ('{structure_hint.source_name}'), "
-                    f"given in full:\n{structure_hint.full_text}"
+                reference_by_dim["structural_fidelity"] = (
+                    f"Structural template mirrored: '{structure_hint.source_name}' (full text given):\n"
+                    f"{structure_hint.full_text}"
                 )
             elif structure_hint.section_headings:
                 headings = "\n".join(f"{i+1}. {h}" for i, h in enumerate(structure_hint.section_headings))
-                reference_blocks.append(
-                    f"STRUCTURAL TEMPLATE this document was asked to mirror ('{structure_hint.source_name}')"
-                    f" — section order only:\n{headings}"
+                reference_by_dim["structural_fidelity"] = (
+                    f"Structural template mirrored: '{structure_hint.source_name}' (section order only):\n{headings}"
                 )
+                min_evidence_by_dim["structural_fidelity"] = min(3, len(structure_hint.section_headings))
+            if structure_hint.full_text is None and structure_hint.section_headings is None:
+                min_evidence_by_dim.setdefault("structural_fidelity", 1)
         if "instruction_adherence" in dimensions:
-            reference_blocks.append(f"USER BRIEF/NOTE this document was asked to honour:\n{instructions_text}")
+            reference_by_dim["instruction_adherence"] = (
+                f"User brief/note this document was asked to honour:\n{instructions_text}"
+            )
+            # One requirement per non-empty line is a reasonable floor — the model must not
+            # collapse a multi-requirement brief into a single vague evidence item.
+            min_evidence_by_dim["instruction_adherence"] = max(1, len([l for l in instructions_text.splitlines() if l.strip()]))
         if "deal_consistency" in dimensions:
             covered = "\n".join(f"- {f}" for f in deal_context.covered_facts) or "(none)"
             held_back = "\n".join(f"- {f}" for f in deal_context.held_back_facts) or "(none)"
-            reference_blocks.append(
-                f"DEAL FACTS from the earlier {deal_context.source_label} — this document should "
-                f"explicitly restate the ones below marked 'covered' (matching figures, not vaguer "
-                f"paraphrases) and correctly NOT mention the ones marked 'held back' "
-                f"(a deliberate coverage gap):\nCovered facts:\n{covered}\nHeld-back facts:\n{held_back}"
+            reference_by_dim["deal_consistency"] = (
+                f"Deal facts carried forward from the earlier {deal_context.source_label}:\n"
+                f"Covered facts (should be explicitly restated, matching figures):\n{covered}\n"
+                f"Held-back facts (should be deliberately, correctly absent):\n{held_back}"
             )
+            min_evidence_by_dim["deal_consistency"] = len(deal_context.covered_facts) + len(deal_context.held_back_facts)
 
         system = (
             "You are an exacting QA reviewer for synthetic procurement documents. Score ONLY the "
-            f"dimensions listed here: {dimensions}. For each, follow the scoring guidance and cite "
-            "evidence quoted VERBATIM (copy-pasted, not paraphrased) from the document below. If "
-            "nothing in the document supports a claim, use an empty quote and verdict='weak' — never "
-            "invent a quote. Base every judgment strictly on the reference material and document "
-            "actually provided; do not assume content that isn't given."
+            f"dimensions listed here: {dimensions}.\n\n"
+            "The text between '===== DOCUMENT START =====' and '===== DOCUMENT END =====' below is the "
+            "ONLY place you may copy quotes from. Anything after DOCUMENT END (structural template, "
+            "brief/note, deal facts) is reference material to judge AGAINST, never a quote source.\n\n"
+            "STRICT RULE linking verdict and quote: if verdict is 'strong' or 'partial', 'quote' MUST be "
+            "a non-empty verbatim substring copied from inside the DOCUMENT — a confident verdict with an "
+            "empty quote is invalid and will be discounted. Only use an empty quote when verdict='weak' "
+            "because nothing in the document supports the claim. Never invent or paraphrase a quote.\n\n"
+            "The document's own section headings may be worded differently from the structural template's "
+            "(that's intentional — content must not be copied from the template) — match sections by "
+            "position/purpose, not exact heading text, and quote the document's actual corresponding text.\n\n"
+            "Evidence is not optional — a bare score with no evidence is useless to the reviewer. For "
+            "'instruction_adherence' emit ONE evidence item per distinct requirement found in the "
+            "brief/note (never merge several requirements into one item). For 'deal_consistency' emit "
+            "ONE evidence item per fact listed (both covered AND held-back facts each need their own "
+            "item). For 'structural_fidelity' emit one item per section/structural expectation you "
+            "checked. For 'realism' emit at least 2 items covering different parts of the document.\n\n"
+            "Base every judgment strictly on the reference material and document actually provided; do "
+            "not assume content that isn't given."
         )
-        user = f"DOCUMENT ({doc_type.value}):\n{markdown}"
-        if reference_blocks:
-            user += "\n\n" + "\n\n".join(reference_blocks)
+        user = f"===== DOCUMENT START =====\n{markdown}\n===== DOCUMENT END =====\n\nDocument type: {doc_type.value}"
+        if reference_by_dim:
+            user += "\n\n" + "\n\n".join(reference_by_dim.values())
 
         result: Dict[str, dict] = {
             dim: {"applicable": dim in dimensions} for dim in _ALL_VALIDATION_DIMENSIONS
@@ -897,9 +921,12 @@ class SyntheticDataGenerationService:
                     evidence.append({"aspect": str(e.get("aspect", "")).strip(), "quote": quote, "verdict": verdict})
                 score = max(0.0, min(1.0, float(raw.get("score", 0.5))))
                 scores.append(score)
+                min_expected = min_evidence_by_dim.get(dim, 0)
                 result[dim] = {
                     "applicable": True, "score": round(score, 3),
                     "summary": str(raw.get("summary", "")).strip(), "evidence": evidence,
+                    "reference": reference_by_dim.get(dim),
+                    "thin_evidence": min_expected > 0 and len(evidence) < min_expected,
                 }
             overall = round(sum(scores) / len(scores), 3) if scores else None
             return {
