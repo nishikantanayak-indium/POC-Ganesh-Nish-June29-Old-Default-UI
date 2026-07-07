@@ -21,6 +21,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import random
 import uuid
 import zipfile
 from collections import Counter
@@ -37,7 +38,13 @@ from core.models import (
 )
 
 from . import db, taxonomy
-from .generation_service import SyntheticDataGenerationService, _new_id
+from .generation_service import (
+    STRUCTURE_HINT_FULL_TEXT_MAX_PAGES,
+    DealContext,
+    StructureHint,
+    SyntheticDataGenerationService,
+    _new_id,
+)
 from .models import (
     DatasetStatus,
     MatrixCell,
@@ -322,6 +329,7 @@ class SyntheticDatasetManagementService:
         industries = knobs.get("industries")
         languages = knobs.get("languages")
         note = knobs.get("note", "")
+        mode = knobs.get("mode", "independent")
         seed_docs = (project.seed_summary or {}).get("documents", [])
 
         dataset = db.get_or_create_default_dataset(project_id)
@@ -329,42 +337,89 @@ class SyntheticDatasetManagementService:
         progress_cb({"stage": "start", "message": f"Version v{version.version_no} created",
                      "version_id": version.id})
 
-        total_target = sum(int(t["count"]) for t in doc_targets)
-        done = 0
         documents: List[SyntheticDocument] = []
         by_doc_type: Dict[str, int] = {}
 
-        for target in doc_targets:
-            dtype = DocumentType(target["doc_type"])
-            count = int(target.get("count", 0))
-            if count <= 0:
-                continue
-            brief = target.get("brief") or ""
-
+        def _seeds_for(dtype: DocumentType) -> List[str]:
             # Reuse any matching seed document's captured examples for tone
             # conditioning, same convention as mirror-mode in run_generation.
-            seeds: List[str] = []
+            out: List[str] = []
             for d in seed_docs:
                 if d.get("type") == dtype.value and d.get("examples"):
                     for vals in d["examples"].values():
-                        seeds.extend(vals)
+                        out.extend(vals)
+            return out
 
-            for i in range(count):
-                progress_cb({"stage": "generate", "message": f"Generating {dtype.value} {i + 1}/{count}",
-                             "current": done, "total": total_target, "cell": dtype.value})
-                doc, markdown = self.gen.generate_document(
-                    project_id, dtype, version_id=version.id,
-                    seeds=seeds or None, industries=industries, languages=languages, brief=brief,
-                    note=note,
+        def _structure_hint_for(dtype: DocumentType) -> Optional[StructureHint]:
+            # Ground generation in a real uploaded document's structure — full
+            # text for short documents (fits the prompt comfortably), just the
+            # section-heading order for long ones (already captured at upload).
+            match = next((d for d in seed_docs if d.get("type") == dtype.value), None)
+            if match is None:
+                return None
+            total_pages = int(match.get("total_pages") or 0)
+            if total_pages and total_pages <= STRUCTURE_HINT_FULL_TEXT_MAX_PAGES and match.get("text_key"):
+                try:
+                    full_text = self.store.get_bytes(match["text_key"]).decode("utf-8")
+                    if full_text.strip():
+                        return StructureHint(source_name=match.get("name", dtype.value), full_text=full_text)
+                except Exception as exc:
+                    logger.warning("structure hint: failed to load full text for %s: %s", match.get("id"), exc)
+            headings = [s.get("heading") for s in match.get("sections", []) if s.get("heading")]
+            if headings:
+                return StructureHint(source_name=match.get("name", dtype.value), section_headings=headings)
+            return None
+
+        if mode == "linked":
+            deal_count = max(1, int(knobs.get("deal_count", 1)))
+            total_target = deal_count * 3  # RFP + Contract + RiskSheet per deal
+            done = 0
+            for deal_no in range(1, deal_count + 1):
+                deal_docs = self._generate_linked_deal(
+                    project_id, version.id, industries, languages, note,
+                    seeds_for=_seeds_for, structure_hint_for=_structure_hint_for,
+                    progress_cb=lambda msg, current=None: progress_cb({
+                        "stage": "generate", "message": f"Deal {deal_no}/{deal_count}: {msg}",
+                        "current": done + (current or 0), "total": total_target, "cell": "deal",
+                    }),
                 )
-                key = self._doc_key(project_id, dataset.id, version.version_no, doc.id)
-                doc.artifact_uri = self.store.put_text(key, markdown, "text/markdown")
-                doc.provenance["artifact_key"] = key
-                documents.append(doc)
-                by_doc_type[dtype.value] = by_doc_type.get(dtype.value, 0) + 1
-                done += 1
-                progress_cb({"stage": "generate", "message": f"{dtype.value}: {done}/{total_target} generated",
-                             "current": done, "total": total_target, "cell": dtype.value})
+                for doc in deal_docs:
+                    key = self._doc_key(project_id, dataset.id, version.version_no, doc.id)
+                    # markdown is stashed in provenance by _generate_linked_deal, pop it back out
+                    markdown = doc.provenance.pop("_markdown")
+                    doc.artifact_uri = self.store.put_text(key, markdown, "text/markdown")
+                    doc.provenance["artifact_key"] = key
+                    documents.append(doc)
+                    by_doc_type[doc.doc_type.value] = by_doc_type.get(doc.doc_type.value, 0) + 1
+                    done += 1
+        else:
+            total_target = sum(int(t["count"]) for t in doc_targets)
+            done = 0
+
+            for target in doc_targets:
+                dtype = DocumentType(target["doc_type"])
+                count = int(target.get("count", 0))
+                if count <= 0:
+                    continue
+                brief = target.get("brief") or ""
+                seeds = _seeds_for(dtype)
+
+                for i in range(count):
+                    progress_cb({"stage": "generate", "message": f"Generating {dtype.value} {i + 1}/{count}",
+                                 "current": done, "total": total_target, "cell": dtype.value})
+                    doc, markdown, _facts = self.gen.generate_document(
+                        project_id, dtype, version_id=version.id,
+                        seeds=seeds or None, industries=industries, languages=languages, brief=brief,
+                        note=note, structure_hint=_structure_hint_for(dtype),
+                    )
+                    key = self._doc_key(project_id, dataset.id, version.version_no, doc.id)
+                    doc.artifact_uri = self.store.put_text(key, markdown, "text/markdown")
+                    doc.provenance["artifact_key"] = key
+                    documents.append(doc)
+                    by_doc_type[dtype.value] = by_doc_type.get(dtype.value, 0) + 1
+                    done += 1
+                    progress_cb({"stage": "generate", "message": f"{dtype.value}: {done}/{total_target} generated",
+                                 "current": done, "total": total_target, "cell": dtype.value})
 
         # ── persist ────────────────────────────────────────────────────
         progress_cb({"stage": "persist", "message": "Persisting documents"})
@@ -394,6 +449,87 @@ class SyntheticDatasetManagementService:
         summary = {"version_id": version.id, "version_no": version.version_no, **stats}
         progress_cb({"stage": "complete", "message": "Generation complete", "summary": summary})
         return summary
+
+    def _generate_linked_deal(
+        self,
+        project_id: str,
+        version_id: str,
+        industries: Optional[List[str]],
+        languages: Optional[List[str]],
+        note: str,
+        seeds_for: Callable[[DocumentType], List[str]],
+        progress_cb: Callable[[str, Optional[int]], None],
+        structure_hint_for: Optional[Callable[[DocumentType], Optional[StructureHint]]] = None,
+        covered_ratio: float = 0.75,
+    ) -> List[SyntheticDocument]:
+        """
+        Generate one RFP -> Contract -> RiskSheet deal where each document
+        genuinely references concrete facts from the one before it, so the
+        real (unmodified) cross-document extractor finds real relationships
+        on import — see plan doc for rationale. Deliberately holds back a
+        minority of facts at each step for realistic coverage/mitigation gaps.
+
+        Returns the 3 documents with their markdown temporarily stashed at
+        ``provenance["_markdown"]`` (popped by the caller before persisting)
+        since this method doesn't have access to the artifact store key
+        scheme (that's assembled per-version by the caller).
+        """
+        deal_id = f"DEAL_{uuid.uuid4().hex[:8].upper()}"
+
+        def _split(facts: List[Dict[str, str]]) -> tuple[List[str], List[str]]:
+            texts = [f["text"] for f in facts]
+            random.shuffle(texts)
+            n_covered = max(1, round(len(texts) * covered_ratio)) if texts else 0
+            return texts[:n_covered], texts[n_covered:]
+
+        # 1. RFP — the source of the deal's concrete requirements.
+        progress_cb("generating RFP", 1)
+        rfp_doc, rfp_md, rfp_facts = self.gen.generate_document(
+            project_id, DocumentType.RFP, version_id=version_id,
+            seeds=seeds_for(DocumentType.RFP) or None,
+            industries=industries, languages=languages, note=note,
+            structure_hint=structure_hint_for(DocumentType.RFP) if structure_hint_for else None,
+            emit_key_facts=True,
+        )
+        rfp_doc.provenance.update({"deal_id": deal_id, "deal_role": "source"})
+        rfp_doc.provenance["_markdown"] = rfp_md
+        rfp_covered, rfp_held_back = _split(rfp_facts)
+
+        # 2. Contract — responds to the RFP, covering most (not all) of its facts.
+        progress_cb("generating Contract", 2)
+        contract_doc, contract_md, contract_facts = self.gen.generate_document(
+            project_id, DocumentType.CONTRACT, version_id=version_id,
+            seeds=seeds_for(DocumentType.CONTRACT) or None,
+            industries=industries, languages=languages, note=note,
+            structure_hint=structure_hint_for(DocumentType.CONTRACT) if structure_hint_for else None,
+            deal_context=DealContext("RFP", covered_facts=rfp_covered, held_back_facts=rfp_held_back),
+            emit_key_facts=True,
+        )
+        contract_doc.provenance.update({
+            "deal_id": deal_id, "deal_role": "downstream",
+            "deal_uncovered_requirements": rfp_held_back,
+        })
+        contract_doc.provenance["_markdown"] = contract_md
+        contract_covered, contract_held_back = _split(contract_facts)
+
+        # 3. RiskSheet — analyzes the Contract's clauses, leaving some risks unmitigated.
+        progress_cb("generating RiskSheet", 3)
+        risk_doc, risk_md, _risk_facts = self.gen.generate_document(
+            project_id, DocumentType.RISK_SHEET, version_id=version_id,
+            seeds=seeds_for(DocumentType.RISK_SHEET) or None,
+            industries=industries, languages=languages, note=note,
+            structure_hint=structure_hint_for(DocumentType.RISK_SHEET) if structure_hint_for else None,
+            deal_context=DealContext(
+                "Contract", covered_facts=contract_covered, held_back_facts=contract_held_back,
+            ),
+        )
+        risk_doc.provenance.update({
+            "deal_id": deal_id, "deal_role": "downstream",
+            "deal_unmitigated_facts": contract_held_back,
+        })
+        risk_doc.provenance["_markdown"] = risk_md
+
+        return [rfp_doc, contract_doc, risk_doc]
 
     def doc_type_overview(self, project_id: str) -> dict:
         """Per-document-type gap analysis: how many exist (seed + generated)

@@ -17,7 +17,7 @@ import queue as _queue
 from collections import Counter
 from typing import AsyncGenerator, List, Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
@@ -28,6 +28,7 @@ from core.models import DocumentType, ElementType
 from synthetic import db
 from synthetic import taxonomy
 from synthetic.models import MatrixCell, RecordStatus, SMEVerdict, VersionImmutableError
+from synthetic.storage import get_artifact_store
 from synthetic.schemas import record_json_schema, relationship_json_schema
 
 logger = logging.getLogger(__name__)
@@ -177,13 +178,32 @@ def _build_overview(project) -> dict:
 
 
 @router.post("/projects/{project_id}/seeds")
-async def upload_seeds(project_id: str, files: List[UploadFile] = File(...)) -> dict:
+async def upload_seeds(
+    project_id: str,
+    files: List[UploadFile] = File(...),
+    doc_types: Optional[str] = Form(None),
+) -> dict:
+    """
+    ``doc_types``, when given, is a JSON-encoded array of ``DocumentType``
+    values (e.g. ``'["RFP","Contract"]'``), one per file in ``files`` order —
+    lets the user declare each document's type explicitly instead of relying
+    on the filename-keyword heuristic in the parsers, which is unreliable for
+    files that don't happen to contain a recognized keyword.
+    """
     project = await asyncio.to_thread(db.get_project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
     doc_svc = get_doc_service()
     gen = get_generation_service()
+    store = get_artifact_store()
+
+    declared_types: List[Optional[str]] = []
+    if doc_types:
+        try:
+            declared_types = json.loads(doc_types)
+        except (json.JSONDecodeError, TypeError):
+            raise HTTPException(status_code=400, detail="doc_types must be a JSON array of strings")
 
     file_data = [(await f.read(), f.filename or "seed") for f in files]
 
@@ -193,13 +213,19 @@ async def upload_seeds(project_id: str, files: List[UploadFile] = File(...)) -> 
         docs_meta = []
         parsed: list = []          # (doc, elements) kept so we can build per-doc structure
         all_elements = []
-        for fb, fn in file_data:
+        for i, (fb, fn) in enumerate(file_data):
             try:
                 doc, elements = doc_svc.process_file(fb, fn)
             except Exception as exc:
                 logger.warning("Seed parse failed for %s: %s", fn, exc)
                 docs_meta.append({"name": fn, "elements": 0, "error": str(exc)})
                 continue
+            declared = declared_types[i] if i < len(declared_types) else None
+            if declared:
+                try:
+                    doc.type = DocumentType(declared)
+                except ValueError:
+                    logger.warning("Ignoring invalid declared doc_type '%s' for %s", declared, fn)
             parsed.append((doc, elements))
             all_elements.extend(elements)
 
@@ -237,18 +263,47 @@ async def upload_seeds(project_id: str, files: List[UploadFile] = File(...)) -> 
                     section_cells[sec] = Counter()
                     section_order.append(sec)
                 section_cells[sec][ck] += 1
+
+            # Persist the full native text so short documents can be mirrored
+            # structurally at generation time (see generation_service.StructureHint) —
+            # only the truncated per-element examples above were kept previously.
+            full_text = "\n\n".join((pc.native_text or pc.ocr_text) for pc in doc.page_contents if (pc.native_text or pc.ocr_text))
+            text_key = f"{project_id}/documents/{doc.id}.txt"
+            store.put_text(text_key, full_text, "text/plain")
+
             docs_meta.append({
                 "id": doc.id, "name": doc.name, "type": doc.type.value,
                 "elements": len(elements), "cells": dict(dcells), "examples": dexamples,
+                "total_pages": doc.total_pages, "text_key": text_key,
                 "sections": [{"heading": s, "cells": dict(section_cells[s])} for s in section_order],
             })
 
         # AI-suggested taxonomy derived from the seed content (advisory).
-        suggested = gen.suggest_labels(all_elements, project.label_set)
+        suggested = gen.suggest_labels(all_elements, project.label_set) if all_elements else None
+
+        # Merge with any previously uploaded documents rather than replacing
+        # them outright — a later upload of one doc type (e.g. RFP) must not
+        # wipe out an earlier upload of a different type (e.g. Contract), so
+        # each type keeps its own most-recently-uploaded document(s).
+        prior_summary = project.seed_summary or {}
+        prior_docs = prior_summary.get("documents", [])
+        new_types = {d["type"] for d in docs_meta if d.get("type")}
+        merged_docs = [d for d in prior_docs if d.get("type") not in new_types] + docs_meta
+
+        merged_counts: Counter = Counter()
+        merged_examples: dict = {}
+        for d in merged_docs:
+            for ck, c in d.get("cells", {}).items():
+                merged_counts[ck] += c
+            for ck, exs in d.get("examples", {}).items():
+                bucket = merged_examples.setdefault(ck, [])
+                for ex in exs:
+                    if len(bucket) < 3:
+                        bucket.append(ex)
 
         summary = {
-            "counts": dict(counts), "examples": examples, "documents": docs_meta,
-            "suggested_labels": suggested,
+            "counts": dict(merged_counts), "examples": merged_examples, "documents": merged_docs,
+            "suggested_labels": suggested if suggested is not None else prior_summary.get("suggested_labels", {}),
         }
         db.update_project_seed_summary(project_id, summary)
         return summary

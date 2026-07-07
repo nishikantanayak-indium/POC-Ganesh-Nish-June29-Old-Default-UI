@@ -103,6 +103,8 @@ export interface DocGenKnobs {
   industries?: string[]
   languages?: string[]
   note?: string
+  mode?: 'independent' | 'linked'
+  deal_count?: number
 }
 
 export type GenStage = 'queued' | 'running' | 'validating' | 'scoring' | 'done' | 'error'
@@ -214,6 +216,7 @@ export interface SyntheticDocumentT {
   sections: SyntheticDocSection[]
   status: RecordStatus
   created_at: string
+  provenance?: Record<string, unknown>
 }
 
 export interface DocSMESummary {

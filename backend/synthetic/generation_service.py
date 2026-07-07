@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import uuid
+from dataclasses import dataclass, field as dc_field
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
@@ -119,7 +121,44 @@ def _generate_tool(auto_label: bool, allowed_labels: List[str]) -> dict:
         },
     }
 
-def _generate_document_tool() -> dict:
+def _generate_document_tool(with_key_facts: bool = False) -> dict:
+    properties: dict = {
+        "title": {"type": "string"},
+        "industry": {"type": "string"},
+        "language": {"type": "string"},
+        "sections": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "heading": {"type": "string"},
+                    "body": {"type": "string"},
+                },
+                "required": ["heading", "body"],
+            },
+        },
+    }
+    if with_key_facts:
+        # Concrete, extractable obligations (SLA %, response times, penalty
+        # amounts, deadlines) — used to chain a linked deal's documents so
+        # downstream documents can literally restate specific figures.
+        properties["key_facts"] = {
+            "type": "array",
+            "description": (
+                "3-8 concrete, specific obligations from this document (exact numbers, "
+                "percentages, deadlines, monetary amounts) that a downstream document "
+                "(e.g. a contract responding to this RFP, or a risk sheet analyzing this "
+                "contract) would need to reference specifically."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "text": {"type": "string"},
+                },
+                "required": ["id", "text"],
+            },
+        }
     return {
         "type": "function",
         "function": {
@@ -127,26 +166,41 @@ def _generate_document_tool() -> dict:
             "description": "Emit one complete, coherent synthetic procurement document.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "industry": {"type": "string"},
-                    "language": {"type": "string"},
-                    "sections": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "heading": {"type": "string"},
-                                "body": {"type": "string"},
-                            },
-                            "required": ["heading", "body"],
-                        },
-                    },
-                },
+                "properties": properties,
                 "required": ["title", "sections"],
             },
         },
     }
+
+
+@dataclass
+class DealContext:
+    """Concrete facts carried forward from an earlier document in a linked
+    deal set, so a downstream document can genuinely reference them —
+    the real extractor links documents by semantic overlap of raw text,
+    not shared IDs, so what matters is that the *wording* overlaps."""
+
+    source_label: str  # e.g. "RFP" or "Contract" — what the facts came from
+    covered_facts: List[str] = dc_field(default_factory=list)
+    held_back_facts: List[str] = dc_field(default_factory=list)
+
+
+# A conservative approximation of what comfortably fits in the prompt without
+# crowding out the rest of the instructions — real pages run ~400-600 words.
+STRUCTURE_HINT_FULL_TEXT_MAX_PAGES = 6
+
+
+@dataclass
+class StructureHint:
+    """Grounds generation in a real uploaded document's structure, so the
+    synthetic output isn't invented from nothing. For short documents we can
+    afford to pass the full text as a template to mirror; for long documents
+    we fall back to just the section heading order (already captured at
+    upload time) to stay within the prompt budget."""
+
+    source_name: str
+    full_text: Optional[str] = None
+    section_headings: Optional[List[str]] = None
 
 
 _RELATE_TOOL = {
@@ -542,14 +596,32 @@ class SyntheticDataGenerationService:
         languages: Optional[List[str]] = None,
         brief: Optional[str] = None,
         note: Optional[str] = None,
+        deal_context: Optional[DealContext] = None,
+        structure_hint: Optional[StructureHint] = None,
+        emit_key_facts: bool = False,
         min_sections: int = 4,
         max_sections: int = 9,
-    ) -> tuple[SyntheticDocument, str]:
+    ) -> tuple[SyntheticDocument, str, List[Dict[str, str]]]:
         """
         Author one complete, coherent synthetic document directly (no atomic
         elements as an intermediate step) — the document-level counterpart to
         ``generate_records`` + ``assemble_document`` combined into a single
         drafting call.
+
+        ``deal_context``, when given, carries forward concrete facts from an
+        earlier document in the same linked deal — this is what makes the
+        real cross-document extractor (which links purely on semantic text
+        overlap, no shared IDs needed) actually find relationships between
+        independently-imported synthetic documents. ``emit_key_facts`` asks
+        this document to itself emit facts for a downstream document to use.
+
+        ``structure_hint``, when given, grounds the document's structure
+        (section order, headings, level of detail) in a real uploaded
+        document of the same type, instead of inventing structure from
+        nothing every time.
+
+        Returns ``(doc, markdown, key_facts)`` — ``key_facts`` is ``[]``
+        unless ``emit_key_facts`` was requested.
         """
         industries = industries or taxonomy.DEFAULT_INDUSTRIES
         languages = languages or taxonomy.DEFAULT_LANGUAGES
@@ -564,6 +636,40 @@ class SyntheticDataGenerationService:
         note_block = ""
         if note and note.strip():
             note_block = f"\n\nADDITIONAL GUIDANCE — applies to this whole generation run:\n{note.strip()}"
+        structure_block = ""
+        if structure_hint is not None and structure_hint.full_text:
+            structure_block = (
+                f"\n\nSTRUCTURAL TEMPLATE — a real {doc_type.value} ('{structure_hint.source_name}') is given "
+                "below in full. Mirror its structure closely: the same section order, the same level of "
+                "detail and drafting style per section. Do NOT reuse any of its actual names, figures, or "
+                "sentences — invent entirely new synthetic content that merely follows the same shape.\n\n"
+                f"{structure_hint.full_text}"
+            )
+        elif structure_hint is not None and structure_hint.section_headings:
+            headings = "\n".join(f"{i+1}. {h}" for i, h in enumerate(structure_hint.section_headings))
+            structure_block = (
+                f"\n\nSTRUCTURAL TEMPLATE — follow this real {doc_type.value}'s section order "
+                f"('{structure_hint.source_name}'), inventing new synthetic content for each:\n{headings}"
+            )
+        deal_block = ""
+        if deal_context is not None:
+            covered = "\n".join(f"- {f}" for f in deal_context.covered_facts) or "(none)"
+            held_back = "\n".join(f"- {f}" for f in deal_context.held_back_facts) or "(none)"
+            deal_block = (
+                f"\n\nDEAL CONTEXT — this document is part of the same deal as an earlier "
+                f"{deal_context.source_label}. Reuse the SAME specific figures/terms/wording "
+                f"(not paraphrased into vaguer language) for the facts below marked 'must reference'.\n"
+                f"Facts to explicitly reference, restating the concrete figures:\n{covered}\n"
+                f"Facts to deliberately NOT reference or address (realistic coverage gap — do not mention these):\n{held_back}"
+            )
+
+        key_facts_instruction = ""
+        if emit_key_facts:
+            key_facts_instruction = (
+                "\nAlso emit 'key_facts': 3-8 concrete, specific obligations from this document "
+                "(exact numbers, percentages, deadlines, monetary amounts) that a downstream "
+                "document analyzing or responding to this one would need to reference specifically."
+            )
 
         system = (
             f"You are a senior procurement contract author generating a realistic synthetic "
@@ -574,10 +680,13 @@ class SyntheticDataGenerationService:
             "Use authentic legal/contractual drafting conventions throughout — this must read as a whole "
             "document, not a list of disconnected clauses.\n"
             "Set 'industry' and 'language' to reflect what you chose."
+            f"{key_facts_instruction}"
         )
         data = self._call(
-            system, f"Generate one complete {doc_type.value} document." + brief_block + note_block + seed_block,
-            _generate_document_tool(), "emit_document",
+            system,
+            f"Generate one complete {doc_type.value} document."
+            + brief_block + note_block + structure_block + deal_block + seed_block,
+            _generate_document_tool(with_key_facts=emit_key_facts), "emit_document",
             max_tokens=6000, temperature=0.85,
         )
         title = str(data.get("title") or f"Synthetic {doc_type.value}").strip()
@@ -588,6 +697,11 @@ class SyntheticDataGenerationService:
             for s in data.get("sections", [])
             if str(s.get("body", "")).strip()
         ]
+        key_facts = [
+            {"id": str(f.get("id") or f"F{i+1}"), "text": str(f.get("text", "")).strip()}
+            for i, f in enumerate(data.get("key_facts", []))
+            if str(f.get("text", "")).strip()
+        ] if emit_key_facts else []
 
         lines = [f"# {title}", ""]
         if brief and brief.strip():
@@ -608,7 +722,8 @@ class SyntheticDataGenerationService:
                 "industry": industry, "language": language,
                 "brief": bool(brief and brief.strip()), "seeds_used": len(seeds or []),
                 "synthetic": True,
+                **({"deal_source": deal_context.source_label} if deal_context is not None else {}),
             },
         )
         logger.info("Generated document %s (%s, %d sections)", doc.id, doc_type.value, len(sections))
-        return doc, markdown
+        return doc, markdown, key_facts

@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   FileStack,
   FileText,
+  Link2,
   Plus,
   Trash2,
   Upload,
@@ -25,6 +26,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Table,
   TableBody,
@@ -79,35 +81,55 @@ interface TargetRow {
   brief: string
 }
 
-function SeedUploadCard({ projectId }: { projectId: string }) {
+function DocumentUploadCard({ projectId }: { projectId: string }) {
   const [files, setFiles] = useState<File[]>([])
+  const [fileTypes, setFileTypes] = useState<string[]>([])
   const [dragActive, setDragActive] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
   const { toast } = useToast()
 
-  const addFiles = useCallback((incoming: FileList | null) => {
-    if (!incoming) return
-    setFiles((prev) => [...prev, ...Array.from(incoming)])
-  }, [])
+  const { data: meta } = useQuery({
+    queryKey: ['studio', 'meta'],
+    queryFn: () => getMeta(),
+  })
+  const docTypeOptions = meta?.doc_types ?? []
 
-  const removeFile = (index: number) => setFiles((prev) => prev.filter((_, i) => i !== index))
+  const addFiles = useCallback(
+    (incoming: FileList | null) => {
+      if (!incoming) return
+      const added = Array.from(incoming)
+      setFiles((prev) => [...prev, ...added])
+      setFileTypes((prev) => [...prev, ...added.map(() => docTypeOptions[0] ?? '')])
+    },
+    [docTypeOptions],
+  )
+
+  const removeFile = (index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index))
+    setFileTypes((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  const updateFileType = (index: number, docType: string) => {
+    setFileTypes((prev) => prev.map((t, i) => (i === index ? docType : t)))
+  }
 
   const mutation = useMutation({
-    mutationFn: () => uploadSeeds(projectId, files),
+    mutationFn: () => uploadSeeds(projectId, files, fileTypes),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['studio', 'project', projectId, 'overview'] })
       queryClient.invalidateQueries({ queryKey: ['studio', 'project', projectId, 'doc-overview'] })
       toast({
-        title: 'Seed documents uploaded',
+        title: 'Documents uploaded',
         description: `${files.length} file${files.length === 1 ? '' : 's'} processed successfully.`,
         variant: 'success',
       })
       setFiles([])
+      setFileTypes([])
     },
     onError: (err) => {
       toast({
-        title: 'Could not upload seed documents',
+        title: 'Could not upload documents',
         description: err instanceof Error ? err.message : 'Please try again.',
         variant: 'destructive',
       })
@@ -117,9 +139,9 @@ function SeedUploadCard({ projectId }: { projectId: string }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Seed Documents</CardTitle>
+        <CardTitle>Documents</CardTitle>
         <CardDescription>
-          Upload representative contracts to seed the gap analysis and ground synthetic generation.
+          Upload representative contracts to ground the gap analysis and synthetic generation.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -146,7 +168,7 @@ function SeedUploadCard({ projectId }: { projectId: string }) {
         >
           <Upload className="h-8 w-8 text-ink-subtle" />
           <p className="text-sm font-medium text-ink dark:text-ink-inverted">
-            Drag and drop seed documents, or click to browse
+            Drag and drop documents, or click to browse
           </p>
           <p className="text-xs text-ink-subtle">Accepts .pdf and .docx</p>
           <input
@@ -164,20 +186,34 @@ function SeedUploadCard({ projectId }: { projectId: string }) {
             {files.map((file, i) => (
               <li
                 key={`${file.name}-${i}`}
-                className="flex items-center justify-between rounded-md border border-border bg-surface-subtle px-3 py-1.5 text-sm dark:border-border-dark dark:bg-surface-dark-subtle"
+                className="flex items-center justify-between gap-3 rounded-md border border-border bg-surface-subtle px-3 py-1.5 text-sm dark:border-border-dark dark:bg-surface-dark-subtle"
               >
-                <span className="flex items-center gap-2 truncate">
+                <span className="flex min-w-0 items-center gap-2 truncate">
                   <FileText className="h-4 w-4 shrink-0 text-ink-subtle" />
                   <span className="truncate">{file.name}</span>
                 </span>
-                <button
-                  type="button"
-                  onClick={() => removeFile(i)}
-                  className="ml-2 shrink-0 text-ink-subtle hover:text-danger-600"
-                  aria-label={`Remove ${file.name}`}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Select value={fileTypes[i] ?? ''} onValueChange={(v) => updateFileType(i, v)}>
+                    <SelectTrigger className="h-7 w-32 text-xs">
+                      <SelectValue placeholder="Doc type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {docTypeOptions.map((dt) => (
+                        <SelectItem key={dt} value={dt}>
+                          {dt}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <button
+                    type="button"
+                    onClick={() => removeFile(i)}
+                    className="text-ink-subtle hover:text-danger-600"
+                    aria-label={`Remove ${file.name}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
@@ -190,7 +226,7 @@ function SeedUploadCard({ projectId }: { projectId: string }) {
             onClick={() => mutation.mutate()}
           >
             <Upload className="h-4 w-4" />
-            Upload Seeds
+            Upload Documents
           </Button>
         </div>
       </CardContent>
@@ -210,7 +246,7 @@ function DocOverviewCard({ projectId }: { projectId: string }) {
     <Card>
       <CardHeader>
         <CardTitle>Gap Analysis</CardTitle>
-        <CardDescription>Seed coverage per document type versus target counts.</CardDescription>
+        <CardDescription>Document coverage per type versus target counts.</CardDescription>
       </CardHeader>
       <CardContent>
         {isLoading ? (
@@ -222,9 +258,9 @@ function DocOverviewCard({ projectId }: { projectId: string }) {
         ) : docTypes.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-8 text-center">
             <FileStack className="h-8 w-8 text-ink-subtle" />
-            <p className="text-sm font-medium text-ink dark:text-ink-inverted">No seed documents yet</p>
+            <p className="text-sm font-medium text-ink dark:text-ink-inverted">No documents yet</p>
             <p className="text-xs text-ink-subtle">
-              Upload seed documents above to see coverage against target counts.
+              Upload documents above to see coverage against target counts.
             </p>
           </div>
         ) : (
@@ -232,7 +268,7 @@ function DocOverviewCard({ projectId }: { projectId: string }) {
             <TableHeader>
               <TableRow>
                 <TableHead>Doc Type</TableHead>
-                <TableHead>Seed Count</TableHead>
+                <TableHead>Document Count</TableHead>
                 <TableHead>Target</TableHead>
                 <TableHead>Gap</TableHead>
               </TableRow>
@@ -267,6 +303,8 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
     queryFn: () => getMeta(),
   })
 
+  const [mode, setMode] = useState<'independent' | 'linked'>('independent')
+  const [dealCount, setDealCount] = useState(1)
   const [rows, setRows] = useState<TargetRow[]>([
     { id: nextRowId(), doc_type: meta?.doc_types[0] ?? '', count: 5, brief: '' },
   ])
@@ -291,18 +329,23 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
   }
 
   const canGenerate =
-    !isGenerating && rows.some((r) => r.doc_type.trim() && r.count > 0)
+    !isGenerating &&
+    (mode === 'linked' ? dealCount > 0 : rows.some((r) => r.doc_type.trim() && r.count > 0))
 
   const runGeneration = async () => {
-    const targets: DocGenTarget[] = rows
-      .filter((r) => r.doc_type.trim() && r.count > 0)
-      .map((r) => ({
-        doc_type: r.doc_type,
-        count: r.count,
-        brief: r.brief.trim() || undefined,
-      }))
+    const targets: DocGenTarget[] =
+      mode === 'linked'
+        ? []
+        : rows
+            .filter((r) => r.doc_type.trim() && r.count > 0)
+            .map((r) => ({
+              doc_type: r.doc_type,
+              count: r.count,
+              brief: r.brief.trim() || undefined,
+            }))
 
-    if (targets.length === 0) return
+    if (mode === 'independent' && targets.length === 0) return
+    if (mode === 'linked' && dealCount <= 0) return
 
     const knobs: DocGenKnobs = {
       industries: industries
@@ -314,6 +357,8 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
         .map((s) => s.trim())
         .filter(Boolean),
       note: note.trim() || undefined,
+      mode,
+      ...(mode === 'linked' ? { deal_count: dealCount } : {}),
     }
 
     const controller = new AbortController()
@@ -363,6 +408,36 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        <Tabs value={mode} onValueChange={(v) => setMode(v as 'independent' | 'linked')}>
+          <TabsList>
+            <TabsTrigger value="independent">Independent documents</TabsTrigger>
+            <TabsTrigger value="linked">
+              <Link2 className="mr-1.5 h-3.5 w-3.5" />
+              Linked deal set
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        {mode === 'linked' ? (
+          <div className="space-y-3 rounded-md border border-border p-4 dark:border-border-dark">
+            <p className="text-sm text-ink-muted dark:text-ink-subtle">
+              Each deal generates one RFP, one Contract that responds to it, and one Risk Sheet analyzing
+              the Contract — sharing concrete facts across the three so they genuinely link together when
+              imported into a workspace (with a deliberate minority of requirements/risks left uncovered,
+              for realistic gaps).
+            </p>
+            <div className="max-w-xs space-y-1.5">
+              <Label htmlFor="deal-count">Number of deals to generate</Label>
+              <Input
+                id="deal-count"
+                type="number"
+                min={1}
+                value={dealCount}
+                onChange={(e) => setDealCount(Number(e.target.value) || 0)}
+              />
+            </div>
+          </div>
+        ) : (
         <div className="space-y-3">
           {rows.map((row) => (
             <div key={row.id} className="grid gap-3 rounded-md border border-border p-3 dark:border-border-dark sm:grid-cols-[2fr_1fr_auto] sm:items-start">
@@ -414,6 +489,7 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
             Add target
           </Button>
         </div>
+        )}
 
         <Separator />
 
@@ -509,7 +585,7 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
 export function GenerateTab({ projectId }: GenerateTabProps) {
   return (
     <div className="space-y-6">
-      <SeedUploadCard projectId={projectId} />
+      <DocumentUploadCard projectId={projectId} />
       <DocOverviewCard projectId={projectId} />
       <GenerationBuilder projectId={projectId} />
     </div>

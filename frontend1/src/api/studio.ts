@@ -46,10 +46,11 @@ export const deleteProject = (projectId: string) => apiDelete<{ deleted: true }>
 
 // --- Seeds / gap analysis ---
 
-export const uploadSeeds = (projectId: string, files: File[]) =>
+export const uploadSeeds = (projectId: string, files: File[], docTypes?: string[]) =>
   new Promise<StudioOverview>((resolve, reject) => {
     const formData = new FormData()
     for (const file of files) formData.append('files', file)
+    if (docTypes && docTypes.length > 0) formData.append('doc_types', JSON.stringify(docTypes))
     fetch(`${base}/projects/${projectId}/seeds`, { method: 'POST', body: formData })
       .then((res) => (res.ok ? res.json() : Promise.reject(res)))
       .then(resolve)

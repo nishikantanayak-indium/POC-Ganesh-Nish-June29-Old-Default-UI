@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Check, ChevronDown, Download, X, Pencil, ShieldCheck, Undo2 } from 'lucide-react'
+import { Check, ChevronDown, Download, Link2, X, Pencil, ShieldCheck, Undo2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { PUBLISHED_STYLE, SME_VERDICT_STYLES } from '@/lib/domain-taxonomy'
@@ -404,6 +404,15 @@ export function SMEReviewTab({ projectId }: SMEReviewTabProps) {
                             <Badge variant="outline" className="text-[10px]">
                               {doc.doc_type}
                             </Badge>
+                            {typeof doc.provenance?.deal_id === 'string' && (
+                              <Badge
+                                variant="outline"
+                                className="gap-1 border-accent-200 text-[10px] text-accent-700 dark:border-accent-800 dark:text-accent-300"
+                              >
+                                <Link2 className="h-2.5 w-2.5" />
+                                Deal {doc.provenance.deal_id.slice(-4)}
+                              </Badge>
+                            )}
                             <AnimatePresence mode="wait" initial={false}>
                               {isPublished ? (
                                 <motion.span

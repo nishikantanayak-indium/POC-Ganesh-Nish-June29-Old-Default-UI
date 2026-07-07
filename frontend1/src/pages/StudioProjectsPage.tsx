@@ -148,7 +148,7 @@ function DeleteProjectDialog({
         <DialogHeader>
           <DialogTitle>Delete "{project.name}"?</DialogTitle>
           <DialogDescription>
-            This permanently removes the project, its seed documents, generated versions, and review history. This
+            This permanently removes the project, its uploaded documents, generated versions, and review history. This
             cannot be undone.
           </DialogDescription>
         </DialogHeader>
