@@ -53,19 +53,19 @@ export interface GraphData {
 }
 
 export interface CrossDocRelationship {
-  src: string
-  tgt: string
-  rtype: RelationshipType
-  conf: number
-  ev?: string
+  src_id: string
   src_type: ElementType
   src_text: string
   src_source?: string
-  src_document_id?: string
+  src_doc: string
+  rtype: RelationshipType
+  conf: number
+  ev?: string
+  tgt_id: string
   tgt_type: ElementType
   tgt_text: string
   tgt_source?: string
-  tgt_document_id?: string
+  tgt_doc: string
 }
 
 export interface CoverageResult {
@@ -179,22 +179,68 @@ export type QueryType =
   | 'comparison'
   | 'general'
 
+// Backend flattens neighbor fields directly onto the connection object
+// (services/qa_service.py::_expand_neighbors), not nested under `node`.
 export interface EvidenceConnection {
+  id: string
+  type: ElementType
+  text: string
+  source?: string
   rel: RelationshipType
   direction: 'in' | 'out'
-  node: GraphNode
+  page_number?: number
+  connections?: EvidenceConnection[]
+}
+
+// Most evidence gatherers (coverage_gap, no_mitigation, no_ld, general, comparison
+// seeds) emit this shape. `type` is present for general/comparison seeds but
+// omitted for coverage_gap/no_mitigation/no_ld, where the intent implies it.
+export interface ElementEvidenceItem {
+  id: string
+  type?: ElementType
+  text: string
+  source?: string
+  status?: CoverageStatus
+  document_id?: string
+  page_number?: number
+  connections?: EvidenceConnection[]
+}
+
+// risk_for_partial intent uses risk_id/risk_text instead of id/text, plus the
+// linked requirement id (services/qa_service.py::_gather_risk_for_partial_evidence).
+export interface RiskPartialEvidenceItem {
+  requirement: string
+  risk_id: string
+  risk_text: string
+  source?: string
+  page_number?: number
   connections?: EvidenceConnection[]
 }
 
 export interface CoverageSummary {
-  requirements: { covered: number; partial: number; not_covered: number; total: number }
-  risks: { mitigated: number; unmitigated: number; total: number }
+  requirements: { total: number; covered: number; partially_covered: number; not_covered: number }
+  risks: { total: number; mitigated: number; unmitigated: number; with_ld: number; without_ld: number }
+}
+
+export interface SummaryEvidenceItem {
+  summary: CoverageSummary
+}
+
+// comparison intent's explicit cross-document edges (services/qa_service.py::
+// _gather_comparison_evidence) — distinct shape from the /graph/cross-doc-relationships
+// endpoint's CrossDocRelationship.
+export interface CrossDocEvidenceItem {
+  cross_doc_relationship: RelationshipType
+  from: { id: string; text: string; source?: string; doc: string }
+  to: { id: string; text: string; source?: string; doc: string }
+  evidence?: string
 }
 
 export type EvidenceItem =
-  | (GraphNode & { connections?: EvidenceConnection[] })
-  | ({ kind: 'summary' } & CoverageSummary)
-  | ({ kind: 'cross_doc' } & CrossDocRelationship)
+  | SummaryEvidenceItem
+  | CrossDocEvidenceItem
+  | RiskPartialEvidenceItem
+  | ElementEvidenceItem
 
 export interface ChatMessage {
   id: string

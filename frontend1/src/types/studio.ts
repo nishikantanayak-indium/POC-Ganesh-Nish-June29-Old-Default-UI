@@ -66,15 +66,19 @@ export interface StudioOverview {
   seed_documents: SeedDocument[]
 }
 
+// Mirrors synthetic/dataset_service.py::doc_type_overview's response exactly.
 export interface DocTypeInfo {
   doc_type: string
   seed_count: number
-  target_count?: number
-  gap: number
+  generated_count: number
+  total: number
+  threshold: number
+  deficit: number
 }
 
 export interface DocTypeOverview {
   project_id: string
+  min_threshold: number
   doc_types: DocTypeInfo[]
 }
 

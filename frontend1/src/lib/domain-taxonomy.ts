@@ -148,6 +148,13 @@ export const SME_VERDICT_STYLES: Record<SMEVerdict, Swatch> = {
   },
 }
 
+export const PUBLISHED_STYLE: Swatch = {
+  label: 'Published',
+  badgeClass: 'bg-navy-50 text-navy-700 border-navy-200 dark:bg-navy-900/40 dark:text-navy-200 dark:border-navy-700',
+  dotClass: 'bg-navy-600',
+  textClass: 'text-navy-700 dark:text-navy-300',
+}
+
 export function elementStyle(type: ElementType): Swatch {
   return ELEMENT_TYPE_STYLES[type] ?? ELEMENT_TYPE_STYLES.Document
 }

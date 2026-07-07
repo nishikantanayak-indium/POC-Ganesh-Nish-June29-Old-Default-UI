@@ -242,9 +242,11 @@ function DocOverviewCard({ projectId }: { projectId: string }) {
                 <TableRow key={dt.doc_type}>
                   <TableCell className="font-medium">{dt.doc_type}</TableCell>
                   <TableCell>{dt.seed_count}</TableCell>
-                  <TableCell>{dt.target_count ?? '—'}</TableCell>
+                  <TableCell>{dt.threshold}</TableCell>
                   <TableCell>
-                    <Badge variant={dt.gap > 0 ? 'danger' : 'success'}>{dt.gap > 0 ? `+${dt.gap} needed` : 'On target'}</Badge>
+                    <Badge variant={dt.deficit > 0 ? 'danger' : 'success'}>
+                      {dt.deficit > 0 ? `+${dt.deficit} needed` : 'On target'}
+                    </Badge>
                   </TableCell>
                 </TableRow>
               ))}

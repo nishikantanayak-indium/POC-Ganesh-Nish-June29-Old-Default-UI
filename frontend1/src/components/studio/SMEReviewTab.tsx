@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, X, Pencil, ShieldCheck } from 'lucide-react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { Check, X, Pencil, ShieldCheck, Undo2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
-import { SME_VERDICT_STYLES } from '@/lib/domain-taxonomy'
+import { PUBLISHED_STYLE, SME_VERDICT_STYLES } from '@/lib/domain-taxonomy'
 import { formatDateTime } from '@/lib/formatters'
 import type { RecordStatus, SMEVerdict, StudioVersion, SyntheticDocumentT } from '@/types/studio'
 import {
@@ -12,6 +13,7 @@ import {
   getSmeDocumentsQueue,
   listVersions,
   publishDocuments,
+  recallDocument,
   submitSmeDocumentVerdict,
 } from '@/api/studio'
 import { Badge } from '@/components/ui/badge'
@@ -29,7 +31,7 @@ interface SMEReviewTabProps {
   projectId: string
 }
 
-type FilterKey = 'all' | 'unreviewed' | 'approved' | 'rejected' | 'edited'
+type FilterKey = 'all' | 'unreviewed' | 'approved' | 'rejected' | 'edited' | 'published'
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -37,7 +39,14 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'approved', label: 'Approved' },
   { key: 'rejected', label: 'Rejected' },
   { key: 'edited', label: 'Edited' },
+  { key: 'published', label: 'Published' },
 ]
+
+// Keeps a mutation's `isPending` (and its button spinner) visible for at least
+// `ms` so quick local responses still read as a deliberate action, not a flash.
+function withMinDelay<T>(promise: Promise<T>, ms = 350): Promise<T> {
+  return Promise.all([promise, new Promise((r) => setTimeout(r, ms))]).then(([result]) => result)
+}
 
 function sortVersionsDesc(versions: StudioVersion[]): StudioVersion[] {
   return [...versions].sort((a, b) => {
@@ -105,11 +114,13 @@ export function SMEReviewTab({ projectId }: SMEReviewTabProps) {
         case 'unreviewed':
           return verdict === null
         case 'approved':
-          return verdict === 'approve'
+          return verdict === 'approve' && doc.status !== 'published'
         case 'rejected':
           return verdict === 'reject'
         case 'edited':
           return verdict === 'edit'
+        case 'published':
+          return doc.status === 'published'
         default:
           return true
       }
@@ -152,7 +163,7 @@ export function SMEReviewTab({ projectId }: SMEReviewTabProps) {
 
   const verdictMutation = useMutation({
     mutationFn: (data: { document_id: string; verdict: SMEVerdict; corrected_markdown?: string; corrected_title?: string; comment?: string }) =>
-      submitSmeDocumentVerdict(versionId as string, data),
+      withMinDelay(submitSmeDocumentVerdict(versionId as string, data)),
     onSuccess: (_res, variables) => {
       setLocalVerdicts((prev) => ({ ...prev, [variables.document_id]: variables.verdict }))
       invalidateQueue()
@@ -175,6 +186,22 @@ export function SMEReviewTab({ projectId }: SMEReviewTabProps) {
     },
     onError: () => {
       toast({ title: 'Failed to publish documents', variant: 'destructive' })
+    },
+  })
+
+  const recallMutation = useMutation({
+    mutationFn: (documentId: string) => recallDocument(documentId),
+    onSuccess: (_res, documentId) => {
+      setLocalVerdicts((prev) => {
+        const next = { ...prev }
+        delete next[documentId]
+        return next
+      })
+      invalidateQueue()
+      toast({ title: 'Recalled', description: 'Document pulled back into review — it can be edited and re-submitted.' })
+    },
+    onError: () => {
+      toast({ title: 'Failed to recall document', variant: 'destructive' })
     },
   })
 
@@ -299,58 +326,129 @@ export function SMEReviewTab({ projectId }: SMEReviewTabProps) {
                 {filteredDocuments.length === 0 && (
                   <p className="p-4 text-sm text-ink-muted dark:text-ink-subtle">No documents match this filter.</p>
                 )}
-                {filteredDocuments.map((doc) => {
-                  const verdict = effectiveVerdict(doc)
-                  const isActive = doc.id === selectedDocId
-                  return (
-                    <div
-                      key={doc.id}
-                      onClick={() => setSelectedDocId(doc.id)}
-                      className={cn(
-                        'flex cursor-pointer items-start gap-2.5 px-3 py-3 transition-colors hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle',
-                        isActive && 'bg-accent-50 dark:bg-accent-900/20',
-                      )}
-                    >
-                      <Checkbox
-                        checked={selectedIds.has(doc.id)}
-                        onCheckedChange={() => toggleSelected(doc.id)}
-                        onClick={(e) => e.stopPropagation()}
-                        className="mt-0.5"
-                      />
-                      <div className="min-w-0 flex-1 space-y-1.5">
-                        <p className="truncate text-sm font-medium text-ink dark:text-ink-inverted">{doc.title}</p>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <Badge variant="outline" className="text-[10px]">
-                            {doc.doc_type}
-                          </Badge>
-                          {verdict ? (
-                            <Badge
-                              variant="outline"
-                              className={cn('border text-[10px]', SME_VERDICT_STYLES[verdict].badgeClass)}
-                            >
-                              {SME_VERDICT_STYLES[verdict].label}
+                <AnimatePresence initial={false}>
+                  {filteredDocuments.map((doc) => {
+                    const verdict = effectiveVerdict(doc)
+                    const isActive = doc.id === selectedDocId
+                    const isPublished = doc.status === 'published'
+                    return (
+                      <motion.div
+                        key={doc.id}
+                        layout
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0, height: 0 }}
+                        transition={{ duration: 0.25, ease: 'easeOut' }}
+                        onClick={() => setSelectedDocId(doc.id)}
+                        className={cn(
+                          'flex cursor-pointer items-start gap-2.5 px-3 py-3 transition-colors hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle',
+                          isActive && 'bg-accent-50 dark:bg-accent-900/20',
+                        )}
+                      >
+                        {isPublished ? (
+                          <div className="mt-0.5 h-4 w-4 shrink-0" />
+                        ) : (
+                          <Checkbox
+                            checked={selectedIds.has(doc.id)}
+                            onCheckedChange={() => toggleSelected(doc.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="mt-0.5"
+                          />
+                        )}
+                        <div className="min-w-0 flex-1 space-y-1.5">
+                          <p className="truncate text-sm font-medium text-ink dark:text-ink-inverted">{doc.title}</p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Badge variant="outline" className="text-[10px]">
+                              {doc.doc_type}
                             </Badge>
-                          ) : (
-                            <Badge variant="secondary" className="text-[10px]">
-                              Pending
-                            </Badge>
-                          )}
+                            <AnimatePresence mode="wait" initial={false}>
+                              {isPublished ? (
+                                <motion.span
+                                  key="published"
+                                  initial={{ opacity: 0, scale: 0.9 }}
+                                  animate={{ opacity: 1, scale: 1 }}
+                                  transition={{ duration: 0.2 }}
+                                >
+                                  <Badge variant="outline" className={cn('border text-[10px]', PUBLISHED_STYLE.badgeClass)}>
+                                    {PUBLISHED_STYLE.label}
+                                  </Badge>
+                                </motion.span>
+                              ) : verdict ? (
+                                <motion.span
+                                  key={verdict}
+                                  initial={{ opacity: 0, scale: 0.9 }}
+                                  animate={{ opacity: 1, scale: 1 }}
+                                  transition={{ duration: 0.2 }}
+                                >
+                                  <Badge
+                                    variant="outline"
+                                    className={cn('border text-[10px]', SME_VERDICT_STYLES[verdict].badgeClass)}
+                                  >
+                                    {SME_VERDICT_STYLES[verdict].label}
+                                  </Badge>
+                                </motion.span>
+                              ) : (
+                                <motion.span
+                                  key="pending"
+                                  initial={{ opacity: 0, scale: 0.9 }}
+                                  animate={{ opacity: 1, scale: 1 }}
+                                  transition={{ duration: 0.2 }}
+                                >
+                                  <Badge variant="secondary" className="text-[10px]">
+                                    Pending
+                                  </Badge>
+                                </motion.span>
+                              )}
+                            </AnimatePresence>
+                          </div>
                         </div>
-                      </div>
-                    </div>
-                  )
-                })}
+                      </motion.div>
+                    )
+                  })}
+                </AnimatePresence>
               </div>
             </ScrollArea>
           </div>
 
           <div className="rounded-lg border border-border p-5 dark:border-border-dark">
+            <AnimatePresence mode="wait" initial={false}>
             {!selectedDoc ? (
-              <div className="flex h-full items-center justify-center text-sm text-ink-muted dark:text-ink-subtle">
+              <motion.div
+                key="empty"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="flex h-full items-center justify-center text-sm text-ink-muted dark:text-ink-subtle"
+              >
                 Select a document to review.
-              </div>
+              </motion.div>
             ) : (
-              <div className="flex h-full flex-col gap-4">
+              <motion.div
+                key={selectedDoc.id}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
+                className="flex h-full flex-col gap-4"
+              >
+                {selectedDoc.status === 'published' && (
+                  <div className="flex items-center justify-between gap-3 rounded-md border border-navy-200 bg-navy-50 px-3 py-2 dark:border-navy-700 dark:bg-navy-900/30">
+                    <span className={cn('inline-flex items-center gap-1.5 text-sm font-medium', PUBLISHED_STYLE.textClass)}>
+                      <span className={cn('h-1.5 w-1.5 rounded-full', PUBLISHED_STYLE.dotClass)} />
+                      Published to the shared store — read-only until recalled.
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      loading={recallMutation.isPending}
+                      onClick={() => recallMutation.mutate(selectedDoc.id)}
+                    >
+                      <Undo2 className="h-3.5 w-3.5" />
+                      Recall to edit
+                    </Button>
+                  </div>
+                )}
+
                 <DocumentViewer
                   title={isEditing ? editedTitle ?? selectedDoc.title : selectedDoc.title}
                   sections={selectedDoc.sections}
@@ -363,56 +461,67 @@ export function SMEReviewTab({ projectId }: SMEReviewTabProps) {
                   exportDocxUrl={versionId ? exportDocDocxUrl(versionId, selectedDoc.id) : undefined}
                 />
 
-                <div className="space-y-2 border-t border-border pt-4 dark:border-border-dark">
-                  <Textarea
-                    placeholder="Optional review comment…"
-                    value={comment}
-                    onChange={(e) => setComment(e.target.value)}
-                    className="min-h-[64px]"
-                  />
-                  <div className="flex flex-wrap items-center gap-2">
-                    {!isEditing ? (
-                      <>
-                        <Button
-                          className="bg-success-600 text-white hover:bg-success-700"
-                          loading={verdictMutation.isPending && verdictMutation.variables?.verdict === 'approve'}
-                          onClick={() => submitVerdict('approve')}
-                        >
-                          <Check className="h-4 w-4" />
-                          Approve
-                        </Button>
-                        <Button
-                          variant="destructive"
-                          loading={verdictMutation.isPending && verdictMutation.variables?.verdict === 'reject'}
-                          onClick={() => submitVerdict('reject')}
-                        >
-                          <X className="h-4 w-4" />
-                          Reject
-                        </Button>
-                        <Button variant="secondary" onClick={() => setIsEditing(true)}>
-                          <Pencil className="h-4 w-4" />
-                          Edit
-                        </Button>
-                      </>
-                    ) : (
-                      <>
-                        <Button
-                          variant="secondary"
-                          loading={verdictMutation.isPending}
-                          onClick={() => submitVerdict('edit')}
-                        >
-                          <Check className="h-4 w-4" />
-                          Save edit &amp; submit
-                        </Button>
-                        <Button variant="outline" onClick={() => setIsEditing(false)}>
-                          Cancel
-                        </Button>
-                      </>
-                    )}
+                {selectedDoc.status !== 'published' && (
+                  <div className="space-y-2 border-t border-border pt-4 dark:border-border-dark">
+                    <Textarea
+                      placeholder="Optional review comment…"
+                      value={comment}
+                      onChange={(e) => setComment(e.target.value)}
+                      className="min-h-[64px]"
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      {!isEditing ? (
+                        <>
+                          <Button
+                            className="bg-success-600 text-white transition-transform active:scale-95 hover:bg-success-700"
+                            loading={verdictMutation.isPending && verdictMutation.variables?.verdict === 'approve'}
+                            disabled={verdictMutation.isPending}
+                            onClick={() => submitVerdict('approve')}
+                          >
+                            <Check className="h-4 w-4" />
+                            Approve
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            className="transition-transform active:scale-95"
+                            loading={verdictMutation.isPending && verdictMutation.variables?.verdict === 'reject'}
+                            disabled={verdictMutation.isPending}
+                            onClick={() => submitVerdict('reject')}
+                          >
+                            <X className="h-4 w-4" />
+                            Reject
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            className="transition-transform active:scale-95"
+                            disabled={verdictMutation.isPending}
+                            onClick={() => setIsEditing(true)}
+                          >
+                            <Pencil className="h-4 w-4" />
+                            Edit
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Button
+                            variant="secondary"
+                            loading={verdictMutation.isPending}
+                            onClick={() => submitVerdict('edit')}
+                          >
+                            <Check className="h-4 w-4" />
+                            Save edit &amp; submit
+                          </Button>
+                          <Button variant="outline" onClick={() => setIsEditing(false)}>
+                            Cancel
+                          </Button>
+                        </>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </div>
+                )}
+              </motion.div>
             )}
+            </AnimatePresence>
           </div>
         </div>
       )}

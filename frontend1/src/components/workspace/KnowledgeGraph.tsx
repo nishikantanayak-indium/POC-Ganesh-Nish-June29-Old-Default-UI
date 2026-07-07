@@ -13,12 +13,13 @@ import {
   type Node,
   type Edge,
   type NodeProps,
+  type NodeChange,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 // Browser-safe (no Worker/child_process) ELK bundle — required for Vite/browser bundling.
 import ELK from 'elkjs/lib/elk.bundled.js'
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, type SimulationNodeDatum } from 'd3-force'
-import { GitBranch, Layers, Loader2, Search, Sparkles, X } from 'lucide-react'
+import { GitBranch, Layers, Loader2, Minus, Plus, Search, Sparkles, X } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { elementStyle, relationshipStyle } from '@/lib/domain-taxonomy'
@@ -32,6 +33,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 // ---------------------------------------------------------------------------
 // Hex color maps — React Flow renders edges as raw SVG, so Tailwind utility
@@ -60,6 +62,9 @@ const RELATIONSHIP_HEX: Record<RelationshipType, string> = {
 
 const NODE_WIDTH = 220
 const NODE_HEIGHT = 72
+// Bounding-circle radius of a node card (+padding) — a floor for the d3-force
+// collide force so cards never visually overlap even at low spacing values.
+const NODE_SAFE_RADIUS = Math.sqrt((NODE_WIDTH / 2) ** 2 + (NODE_HEIGHT / 2) ** 2) + 8
 
 // ---------------------------------------------------------------------------
 // Graph merge helper — dedupes nodes by id and edges by (src, rtype, tgt).
@@ -81,9 +86,15 @@ function mergeGraphData(base: GraphData, incoming: GraphData): GraphData {
 // ---------------------------------------------------------------------------
 const elk = new ELK()
 
+const DEFAULT_SPACING = 1
+const MIN_SPACING = 0.5
+const MAX_SPACING = 2.5
+const SPACING_STEP = 0.25
+
 async function computeElkLayout(
   nodes: GraphNode[],
   edges: GraphEdge[],
+  spacing: number,
 ): Promise<Record<string, { x: number; y: number }>> {
   const nodeIds = new Set(nodes.map((n) => n.id))
   const elkGraph = {
@@ -91,8 +102,8 @@ async function computeElkLayout(
     layoutOptions: {
       'elk.algorithm': 'layered',
       'elk.direction': 'RIGHT',
-      'elk.spacing.nodeNode': '60',
-      'elk.layered.spacing.nodeNodeBetweenLayers': '90',
+      'elk.spacing.nodeNode': String(Math.round(60 * spacing)),
+      'elk.layered.spacing.nodeNodeBetweenLayers': String(Math.round(90 * spacing)),
       'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
       'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
       'elk.edgeRouting': 'ORTHOGONAL',
@@ -115,7 +126,11 @@ interface ForceSimNode extends SimulationNodeDatum {
   id: string
 }
 
-function computeForceLayout(nodes: GraphNode[], edges: GraphEdge[]): Record<string, { x: number; y: number }> {
+function computeForceLayout(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  spacing: number,
+): Record<string, { x: number; y: number }> {
   const simNodes: ForceSimNode[] = nodes.map((n) => ({ id: n.id }))
   const nodeIds = new Set(simNodes.map((n) => n.id))
   const simLinks = edges
@@ -127,12 +142,12 @@ function computeForceLayout(nodes: GraphNode[], edges: GraphEdge[]): Record<stri
       'link',
       forceLink<ForceSimNode, { source: string; target: string }>(simLinks)
         .id((d) => d.id)
-        .distance(170)
-        .strength(0.5),
+        .distance(130 * spacing)
+        .strength(0.6),
     )
-    .force('charge', forceManyBody().strength(-320))
+    .force('charge', forceManyBody().strength(-180 * spacing))
     .force('center', forceCenter(500, 350))
-    .force('collide', forceCollide(NODE_WIDTH / 2 + 12))
+    .force('collide', forceCollide(Math.max(NODE_SAFE_RADIUS, (NODE_WIDTH / 2 + 8) * spacing)).strength(1))
     .stop()
 
   const TICKS = 300
@@ -324,7 +339,7 @@ function CrossDocPanel({
               {filtered.map((rel, i) => {
                 const style = relationshipStyle(rel.rtype)
                 return (
-                  <li key={`${rel.src}-${rel.rtype}-${rel.tgt}-${i}`}>
+                  <li key={`${rel.src_id}-${rel.rtype}-${rel.tgt_id}-${i}`}>
                     <button
                       type="button"
                       onClick={() => onSelect(rel)}
@@ -336,10 +351,12 @@ function CrossDocPanel({
                         </Badge>
                         <span className="text-[10px] text-ink-subtle">{Math.round(rel.conf * 100)}%</span>
                       </div>
-                      <p className="mt-1.5 truncate text-ink-muted dark:text-ink-subtle">
-                        <span className="font-medium text-ink dark:text-ink-inverted">{rel.src_source ?? rel.src}</span>{' '}
-                        ({rel.src_type}) → <span className="font-medium text-ink dark:text-ink-inverted">{rel.tgt_source ?? rel.tgt}</span>{' '}
-                        ({rel.tgt_type})
+                      <p className="mt-1.5 line-clamp-2 text-ink-muted dark:text-ink-subtle">
+                        <span className="font-medium text-ink dark:text-ink-inverted">{rel.src_text}</span>
+                        <span className="mx-1 text-ink-subtle">({rel.src_type} · {rel.src_doc})</span>
+                        →{' '}
+                        <span className="font-medium text-ink dark:text-ink-inverted">{rel.tgt_text}</span>
+                        <span className="mx-1 text-ink-subtle">({rel.tgt_type} · {rel.tgt_doc})</span>
                       </p>
                     </button>
                   </li>
@@ -367,6 +384,7 @@ function KnowledgeGraphInner({ workspaceId, refreshKey }: KnowledgeGraphProps) {
 
   const [showContains, setShowContains] = useState(false)
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('structured')
+  const [spacing, setSpacing] = useState(DEFAULT_SPACING)
   const [merged, setMerged] = useState<GraphData>({ nodes: [], edges: [] })
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({})
   const [layoutLoading, setLayoutLoading] = useState(false)
@@ -415,8 +433,8 @@ function KnowledgeGraphInner({ workspaceId, refreshKey }: KnowledgeGraphProps) {
     const run = async () => {
       const pos =
         layoutMode === 'structured'
-          ? await computeElkLayout(merged.nodes, merged.edges)
-          : computeForceLayout(merged.nodes, merged.edges)
+          ? await computeElkLayout(merged.nodes, merged.edges, spacing)
+          : computeForceLayout(merged.nodes, merged.edges, spacing)
       if (!cancelled) {
         setPositions(pos)
         setLayoutLoading(false)
@@ -428,12 +446,15 @@ function KnowledgeGraphInner({ workspaceId, refreshKey }: KnowledgeGraphProps) {
     return () => {
       cancelled = true
     }
-  }, [merged, layoutMode])
+  }, [merged, layoutMode, spacing])
 
   // Fit view once a fresh layout has settled.
   useEffect(() => {
     if (!layoutLoading && Object.keys(positions).length > 0) {
-      const id = window.setTimeout(() => rf.fitView({ duration: 300, padding: 0.15 }), 30)
+      const id = window.setTimeout(
+        () => rf.fitView({ duration: 300, padding: 0.15, minZoom: 0.5, maxZoom: 1.5 }),
+        30,
+      )
       return () => window.clearTimeout(id)
     }
   }, [layoutLoading, positions, rf])
@@ -452,6 +473,8 @@ function KnowledgeGraphInner({ workspaceId, refreshKey }: KnowledgeGraphProps) {
         id: n.id,
         type: 'graphNode',
         position: positions[n.id] ?? { x: 0, y: 0 },
+        width: NODE_WIDTH,
+        height: NODE_HEIGHT,
         data: {
           node: n,
           highlighted: highlightedNodeIds.has(n.id),
@@ -491,6 +514,21 @@ function KnowledgeGraphInner({ workspaceId, refreshKey }: KnowledgeGraphProps) {
     setSelectedNode(node.data.node)
   }, [])
 
+  // Persist manual drag repositioning into `positions` so nodes stay where the
+  // user left them across re-renders (rfNodes reads from `positions[n.id]`).
+  const handleNodesChange = useCallback((changes: NodeChange[]) => {
+    const moved = changes.filter(
+      (c): c is NodeChange & { type: 'position'; position: { x: number; y: number } } =>
+        c.type === 'position' && !!c.position,
+    )
+    if (moved.length === 0) return
+    setPositions((prev) => {
+      const next = { ...prev }
+      for (const change of moved) next[change.id] = change.position
+      return next
+    })
+  }, [])
+
   const handleNodeDoubleClick = useCallback(
     async (_: unknown, node: RFNode) => {
       const graphNode = node.data.node
@@ -515,9 +553,9 @@ function KnowledgeGraphInner({ workspaceId, refreshKey }: KnowledgeGraphProps) {
 
   function handleCrossDocSelect(rel: CrossDocRelationship) {
     const nodeIds = new Set(merged.nodes.map((n) => n.id))
-    setHighlightedNodeIds(new Set([rel.src, rel.tgt]))
-    setHighlightedEdgeKey(`${rel.src}__${rel.rtype}__${rel.tgt}`)
-    const present = [rel.src, rel.tgt].filter((id) => nodeIds.has(id))
+    setHighlightedNodeIds(new Set([rel.src_id, rel.tgt_id]))
+    setHighlightedEdgeKey(`${rel.src_id}__${rel.rtype}__${rel.tgt_id}`)
+    const present = [rel.src_id, rel.tgt_id].filter((id) => nodeIds.has(id))
     if (present.length > 0) {
       rf.fitView({ nodes: present.map((id) => ({ id })), duration: 400, padding: 0.35 })
     }
@@ -549,6 +587,42 @@ function KnowledgeGraphInner({ workspaceId, refreshKey }: KnowledgeGraphProps) {
             <Sparkles className="mr-1 h-3.5 w-3.5" />
             Organic
           </Button>
+        </Card>
+
+        <Card className="flex items-center gap-1 p-1 shadow-popover">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                disabled={spacing <= MIN_SPACING}
+                onClick={() => setSpacing((s) => Math.max(MIN_SPACING, +(s - SPACING_STEP).toFixed(2)))}
+                aria-label="Decrease node spacing"
+              >
+                <Minus className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Move nodes closer together</TooltipContent>
+          </Tooltip>
+          <span className="w-10 shrink-0 text-center text-[11px] font-medium text-ink-muted dark:text-ink-subtle">
+            {Math.round((spacing / DEFAULT_SPACING) * 100)}%
+          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                disabled={spacing >= MAX_SPACING}
+                onClick={() => setSpacing((s) => Math.min(MAX_SPACING, +(s + SPACING_STEP).toFixed(2)))}
+                aria-label="Increase node spacing"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Spread nodes further apart</TooltipContent>
+          </Tooltip>
         </Card>
 
         <form onSubmit={handleSearchSubmit}>
@@ -627,6 +701,8 @@ function KnowledgeGraphInner({ workspaceId, refreshKey }: KnowledgeGraphProps) {
           nodes={rfNodes}
           edges={rfEdges}
           nodeTypes={nodeTypes}
+          onNodesChange={handleNodesChange}
+          nodesDraggable
           onNodeClick={handleNodeClick}
           onNodeDoubleClick={handleNodeDoubleClick}
           onPaneClick={() => setSelectedNode(null)}
@@ -639,7 +715,8 @@ function KnowledgeGraphInner({ workspaceId, refreshKey }: KnowledgeGraphProps) {
           <MiniMap
             pannable
             zoomable
-            className="!bg-surface dark:!bg-surface-dark-subtle"
+            onClick={(_, pos) => rf.setCenter(pos.x, pos.y, { zoom: 1.4, duration: 500 })}
+            className="!bg-surface dark:!bg-surface-dark-subtle [&_.react-flow__minimap-svg]:cursor-pointer"
             maskColor="rgba(148, 163, 184, 0.15)"
             nodeColor={(n) => {
               const data = (n as RFNode).data

@@ -14,36 +14,28 @@ import { truncate } from '@/lib/formatters'
 import { elementStyle, relationshipStyle, coverageStyle } from '@/lib/domain-taxonomy'
 import type {
   CoverageSummary,
-  CrossDocRelationship,
+  CrossDocEvidenceItem,
+  ElementEvidenceItem,
   EvidenceConnection,
   EvidenceItem,
-  GraphNode,
+  RiskPartialEvidenceItem,
 } from '@/types/analysis'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 const TEXT_TRUNCATE_LENGTH = 160
 
-function ConfidencePct({ confidence }: { confidence?: number }) {
-  if (confidence === undefined || confidence === null || Number.isNaN(confidence)) return null
-  return (
-    <span className="text-xs font-medium text-ink-subtle">
-      {Math.round(confidence * 100)}% confidence
-    </span>
-  )
-}
-
-function NodeMeta({ node }: { node: GraphNode }) {
+function NodeMeta({ source, pageNumber }: { source?: string; pageNumber?: number }) {
+  if (!source && pageNumber === undefined) return null
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs text-ink-subtle">
-      {node.source && (
+      {source && (
         <span className="inline-flex items-center gap-1">
           <FileText className="h-3 w-3" />
-          {node.source}
+          {source}
         </span>
       )}
-      {node.page_number !== undefined && <span>p. {node.page_number}</span>}
-      <ConfidencePct confidence={node.confidence} />
+      {pageNumber !== undefined && <span>p. {pageNumber}</span>}
     </div>
   )
 }
@@ -55,9 +47,9 @@ interface ConnectionRowProps {
 
 function ConnectionRow({ connection, depth = 0 }: ConnectionRowProps) {
   const [expanded, setExpanded] = useState(false)
-  const { node, rel, direction, connections } = connection
+  const { text, type, source, page_number, rel, direction, connections } = connection
   const relStyle = relationshipStyle(rel)
-  const nodeStyle = elementStyle(node.type)
+  const nodeStyle = elementStyle(type)
   const hasChildren = !!connections && connections.length > 0
 
   return (
@@ -82,8 +74,8 @@ function ConnectionRow({ connection, depth = 0 }: ConnectionRowProps) {
               {nodeStyle.label}
             </Badge>
           </div>
-          <p className="mt-0.5 text-ink dark:text-ink-inverted">{truncate(node.text, TEXT_TRUNCATE_LENGTH)}</p>
-          <NodeMeta node={node} />
+          <p className="mt-0.5 text-ink dark:text-ink-inverted">{truncate(text, TEXT_TRUNCATE_LENGTH)}</p>
+          <NodeMeta source={source} pageNumber={page_number} />
         </div>
         {hasChildren && (
           <span className="mt-0.5 shrink-0 text-ink-subtle">
@@ -102,7 +94,7 @@ function ConnectionRow({ connection, depth = 0 }: ConnectionRowProps) {
           >
             <div className="space-y-0.5 pb-1">
               {connections!.map((child, i) => (
-                <ConnectionRow key={`${child.node.id}-${i}`} connection={child} depth={depth + 1} />
+                <ConnectionRow key={`${child.id}-${i}`} connection={child} depth={depth + 1} />
               ))}
             </div>
           </motion.div>
@@ -113,7 +105,9 @@ function ConnectionRow({ connection, depth = 0 }: ConnectionRowProps) {
 }
 
 interface EvidenceCardProps {
-  node: GraphNode & { connections?: EvidenceConnection[] }
+  // `type` defaults to a sensible fallback at the call site since some intents
+  // (coverage_gap/no_mitigation/no_ld) omit it — the intent implies the element type.
+  node: ElementEvidenceItem & { type: NonNullable<ElementEvidenceItem['type']> }
 }
 
 export function EvidenceCard({ node }: EvidenceCardProps) {
@@ -130,7 +124,11 @@ export function EvidenceCard({ node }: EvidenceCardProps) {
           <Badge className={style.badgeClass} variant="outline">
             {style.label}
           </Badge>
-          <ConfidencePct confidence={node.confidence} />
+          {node.status && (
+            <Badge className={coverageStyle(node.status).badgeClass} variant="outline">
+              {coverageStyle(node.status).label}
+            </Badge>
+          )}
         </div>
         <p className="text-sm leading-relaxed text-ink dark:text-ink-inverted">
           {showFull ? node.text : truncate(node.text, TEXT_TRUNCATE_LENGTH)}
@@ -144,7 +142,7 @@ export function EvidenceCard({ node }: EvidenceCardProps) {
             {showFull ? 'Show less' : 'Show more'}
           </button>
         )}
-        <NodeMeta node={node} />
+        <NodeMeta source={node.source} pageNumber={node.page_number} />
         {hasConnections && (
           <div className="border-t border-border pt-2 dark:border-border-dark">
             <button
@@ -166,7 +164,7 @@ export function EvidenceCard({ node }: EvidenceCardProps) {
                 >
                   <div className="mt-2 space-y-0.5">
                     {node.connections!.map((c, i) => (
-                      <ConnectionRow key={`${c.node.id}-${i}`} connection={c} />
+                      <ConnectionRow key={`${c.id}-${i}`} connection={c} />
                     ))}
                   </div>
                 </motion.div>
@@ -230,7 +228,7 @@ export function SummaryCard({ summary }: SummaryCardProps) {
           />
           <StatBar
             label={coverageStyle('Partially Covered').label}
-            value={requirements.partial}
+            value={requirements.partially_covered}
             total={requirements.total}
             colorClass={coverageStyle('Partially Covered').dotClass}
           />
@@ -245,18 +243,10 @@ export function SummaryCard({ summary }: SummaryCardProps) {
           <p className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">
             Risks ({risks.total})
           </p>
-          <StatBar
-            label="Mitigated"
-            value={risks.mitigated}
-            total={risks.total}
-            colorClass="bg-success-500"
-          />
-          <StatBar
-            label="Unmitigated"
-            value={risks.unmitigated}
-            total={risks.total}
-            colorClass="bg-danger-500"
-          />
+          <StatBar label="Mitigated" value={risks.mitigated} total={risks.total} colorClass="bg-success-500" />
+          <StatBar label="Unmitigated" value={risks.unmitigated} total={risks.total} colorClass="bg-danger-500" />
+          <StatBar label="With liquidated damages" value={risks.with_ld} total={risks.total} colorClass="bg-warning-500" />
+          <StatBar label="Without liquidated damages" value={risks.without_ld} total={risks.total} colorClass="bg-slate-400" />
         </div>
       </CardContent>
     </Card>
@@ -264,15 +254,13 @@ export function SummaryCard({ summary }: SummaryCardProps) {
 }
 
 interface CrossDocCardProps {
-  relationship: CrossDocRelationship
+  relationship: CrossDocEvidenceItem
 }
 
 export function CrossDocCard({ relationship }: CrossDocCardProps) {
   const rel = relationship
-  const relStyle = relationshipStyle(rel.rtype)
-  const srcStyle = elementStyle(rel.src_type)
-  const tgtStyle = elementStyle(rel.tgt_type)
-  const isCrossDoc = rel.src_document_id !== rel.tgt_document_id
+  const relStyle = relationshipStyle(rel.cross_doc_relationship)
+  const isCrossDoc = rel.from.doc !== rel.to.doc
 
   return (
     <Card className="border-border/80">
@@ -288,23 +276,20 @@ export function CrossDocCard({ relationship }: CrossDocCardProps) {
             </span>
           )}
         </div>
-        <div className="space-y-1.5">
-          <Badge className={srcStyle.badgeClass} variant="outline">
-            {srcStyle.label}
-          </Badge>
-          <p className="text-sm text-ink dark:text-ink-inverted">{truncate(rel.src_text, TEXT_TRUNCATE_LENGTH)}</p>
-          {rel.src_source && <p className="text-xs text-ink-subtle">{rel.src_source}</p>}
+        <div className="space-y-1.5 rounded-md border border-border/60 bg-surface-subtle p-2.5 dark:border-border-dark dark:bg-surface-dark-muted">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-subtle">From</p>
+          <p className="text-sm text-ink dark:text-ink-inverted">{truncate(rel.from.text, TEXT_TRUNCATE_LENGTH)}</p>
+          {rel.from.source && <p className="text-xs text-ink-subtle">{rel.from.source}</p>}
         </div>
         <div className="flex items-center gap-2 text-ink-subtle">
           <ArrowDownLeft className="h-4 w-4 rotate-90" />
         </div>
-        <div className="space-y-1.5">
-          <Badge className={tgtStyle.badgeClass} variant="outline">
-            {tgtStyle.label}
-          </Badge>
-          <p className="text-sm text-ink dark:text-ink-inverted">{truncate(rel.tgt_text, TEXT_TRUNCATE_LENGTH)}</p>
-          {rel.tgt_source && <p className="text-xs text-ink-subtle">{rel.tgt_source}</p>}
+        <div className="space-y-1.5 rounded-md border border-border/60 bg-surface-subtle p-2.5 dark:border-border-dark dark:bg-surface-dark-muted">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-subtle">To</p>
+          <p className="text-sm text-ink dark:text-ink-inverted">{truncate(rel.to.text, TEXT_TRUNCATE_LENGTH)}</p>
+          {rel.to.source && <p className="text-xs text-ink-subtle">{rel.to.source}</p>}
         </div>
+        {rel.evidence && <p className="text-xs italic text-ink-subtle">{rel.evidence}</p>}
       </CardContent>
     </Card>
   )
@@ -341,13 +326,35 @@ export function SourcesSection({ evidence }: SourcesSectionProps) {
           >
             <div className="space-y-2 border-t border-border p-4 dark:border-border-dark">
               {evidence.map((item, i) => {
-                if ('kind' in item && item.kind === 'summary') {
-                  return <SummaryCard key={i} summary={item} />
+                if ('summary' in item) {
+                  return <SummaryCard key={i} summary={item.summary} />
                 }
-                if ('kind' in item && item.kind === 'cross_doc') {
+                if ('cross_doc_relationship' in item) {
                   return <CrossDocCard key={i} relationship={item} />
                 }
-                return <EvidenceCard key={(item as GraphNode).id ?? i} node={item as GraphNode & { connections?: EvidenceConnection[] }} />
+                if ('risk_id' in item) {
+                  const risk = item as RiskPartialEvidenceItem
+                  return (
+                    <EvidenceCard
+                      key={risk.risk_id ?? i}
+                      node={{
+                        id: risk.risk_id,
+                        type: 'Risk',
+                        text: risk.risk_text,
+                        source: risk.source,
+                        page_number: risk.page_number,
+                        connections: risk.connections,
+                      }}
+                    />
+                  )
+                }
+                const el = item as ElementEvidenceItem
+                return (
+                  <EvidenceCard
+                    key={el.id ?? i}
+                    node={{ ...el, type: el.type ?? (el.status ? 'Requirement' : 'Risk') }}
+                  />
+                )
               })}
             </div>
           </motion.div>
