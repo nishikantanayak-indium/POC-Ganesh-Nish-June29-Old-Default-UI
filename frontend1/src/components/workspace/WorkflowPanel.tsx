@@ -1,0 +1,342 @@
+import { useCallback, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { AnimatePresence, motion } from 'framer-motion'
+import { ChevronDown, ChevronUp, File as FileIcon, Play, UploadCloud, X } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { PipelineProgress } from './PipelineProgress'
+import { runPipeline } from '@/api/workspaces'
+import { usePipelineStore, useWorkspaceJobs } from '@/store/pipelineStore'
+import { useGlobalToastStore } from '@/store/globalToastStore'
+import { cn } from '@/lib/utils'
+import { formatElapsed } from '@/lib/formatters'
+import type { LogLine, PipelineJob, PipelineStep, SSEEvent, StepId } from '@/types/analysis'
+
+const STEP_DEFS: { id: StepId; label: string }[] = [
+  { id: 'parse', label: 'Parse' },
+  { id: 'extract', label: 'Extract' },
+  { id: 'graph', label: 'Graph' },
+  { id: 'vector', label: 'Vector' },
+  { id: 'coverage', label: 'Coverage' },
+]
+
+function freshSteps(): PipelineStep[] {
+  return STEP_DEFS.map((s) => ({ id: s.id, label: s.label, status: 'pending' as const }))
+}
+
+function nowStamp() {
+  return new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+interface WorkflowPanelProps {
+  workspaceId: string
+  workspaceName?: string
+  onPipelineComplete?: () => void
+}
+
+export function WorkflowPanel({ workspaceId, workspaceName, onPipelineComplete }: WorkflowPanelProps) {
+  const [files, setFiles] = useState<File[]>([])
+  const [dragActive, setDragActive] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const queryClient = useQueryClient()
+  const jobs = useWorkspaceJobs(workspaceId)
+  const isRunning = jobs.some((j) => j.status === 'running')
+
+  const addFiles = useCallback((incoming: FileList | null) => {
+    if (!incoming) return
+    const next = Array.from(incoming).filter((f) => /\.(pdf|docx)$/i.test(f.name))
+    setFiles((prev) => [...prev, ...next])
+  }, [])
+
+  const removeFile = (index: number) => setFiles((prev) => prev.filter((_, i) => i !== index))
+
+  const invalidateWorkspaceQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId, 'status'] })
+    queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId, 'elements'] })
+    queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId, 'documents'] })
+    queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId, 'graph'], exact: false })
+    queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId, 'coverage'] })
+    queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId, 'cross-doc'] })
+  }
+
+  const runJob = async () => {
+    if (files.length === 0 || isRunning) return
+
+    const jobId = crypto.randomUUID()
+    const runNumber = usePipelineStore.getState().nextRunNumber(workspaceId)
+    const job: PipelineJob = {
+      id: jobId,
+      runNumber,
+      workspaceId,
+      fileNames: files.map((f) => f.name),
+      steps: freshSteps(),
+      logs: [{ time: nowStamp(), text: `Starting run #${runNumber} with ${files.length} file(s).` }],
+      status: 'running',
+      startedAt: Date.now(),
+    }
+    usePipelineStore.getState().addJob(job)
+    const runFiles = files
+    setFiles([])
+
+    const patchStep = (stepId: StepId, patch: Partial<PipelineStep>) => {
+      const current = usePipelineStore.getState().jobsByWorkspace[workspaceId]?.find((j) => j.id === jobId)
+      if (!current) return
+      const steps = current.steps.map((s) => (s.id === stepId ? { ...s, ...patch } : s))
+      usePipelineStore.getState().patchJob(workspaceId, jobId, { steps })
+    }
+
+    const appendLog = (line: LogLine) => {
+      const current = usePipelineStore.getState().jobsByWorkspace[workspaceId]?.find((j) => j.id === jobId)
+      if (!current) return
+      usePipelineStore.getState().patchJob(workspaceId, jobId, { logs: [...current.logs, line] })
+    }
+
+    const handleEvent = (event: SSEEvent) => {
+      switch (event.type) {
+        case 'step_start':
+          patchStep(event.step, { status: 'running', message: event.message })
+          appendLog({ time: nowStamp(), text: event.message ?? `${event.step}: started` })
+          break
+        case 'step_progress':
+          patchStep(event.step, { status: 'running', message: event.message, progress: event.progress, count: event.count })
+          if (event.message) appendLog({ time: nowStamp(), text: `${event.step}: ${event.message}` })
+          break
+        case 'step_complete':
+          patchStep(event.step, {
+            status: 'done',
+            message: event.message,
+            count: event.count,
+            elapsed: event.elapsed,
+          })
+          appendLog({ time: nowStamp(), text: event.message ?? `${event.step}: complete` })
+          break
+        case 'pipeline_complete':
+          usePipelineStore.getState().patchJob(workspaceId, jobId, {
+            status: 'done',
+            summary: event.summary,
+            finishedAt: Date.now(),
+          })
+          appendLog({ time: nowStamp(), text: 'Pipeline complete.' })
+          invalidateWorkspaceQueries()
+          onPipelineComplete?.()
+          useGlobalToastStore.getState().push({
+            title: 'Pipeline complete',
+            description: `Run #${runNumber} finished — ${event.summary.elements} elements, ${event.summary.nodes} nodes.`,
+            variant: 'success',
+            workspaceId,
+            workspaceName,
+          })
+          break
+        case 'error':
+          usePipelineStore.getState().patchJob(workspaceId, jobId, { status: 'error', finishedAt: Date.now() })
+          if (event.step) patchStep(event.step, { status: 'error', message: event.message })
+          appendLog({ time: nowStamp(), text: event.message, level: 'error' })
+          useGlobalToastStore.getState().push({
+            title: 'Pipeline failed',
+            description: event.message,
+            variant: 'danger',
+            workspaceId,
+            workspaceName,
+          })
+          break
+      }
+    }
+
+    try {
+      await runPipeline(workspaceId, runFiles, handleEvent)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unexpected error running pipeline.'
+      usePipelineStore.getState().patchJob(workspaceId, jobId, { status: 'error', finishedAt: Date.now() })
+      appendLog({ time: nowStamp(), text: message, level: 'error' })
+      useGlobalToastStore.getState().push({
+        title: 'Pipeline failed',
+        description: message,
+        variant: 'danger',
+        workspaceId,
+        workspaceName,
+      })
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Upload &amp; Run Pipeline</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => inputRef.current?.click()}
+            onDragOver={(e) => {
+              e.preventDefault()
+              setDragActive(true)
+            }}
+            onDragLeave={() => setDragActive(false)}
+            onDrop={(e) => {
+              e.preventDefault()
+              setDragActive(false)
+              addFiles(e.dataTransfer.files)
+            }}
+            className={cn(
+              'flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border px-6 py-10 text-center transition-colors dark:border-border-dark',
+              dragActive
+                ? 'border-accent-400 bg-accent-50 dark:bg-accent-900/20'
+                : 'hover:border-accent-300 hover:bg-surface-subtle dark:hover:bg-surface-dark-subtle',
+            )}
+          >
+            <UploadCloud className="h-8 w-8 text-ink-subtle" />
+            <p className="text-sm font-medium text-ink dark:text-ink-inverted">
+              Drag and drop files, or click to browse
+            </p>
+            <p className="text-xs text-ink-subtle">Accepts .pdf and .docx</p>
+            <input
+              ref={inputRef}
+              type="file"
+              multiple
+              accept=".pdf,.docx"
+              className="hidden"
+              onChange={(e) => addFiles(e.target.files)}
+            />
+          </div>
+
+          {files.length > 0 && (
+            <ul className="space-y-1.5">
+              {files.map((file, i) => (
+                <li
+                  key={`${file.name}-${i}`}
+                  className="flex items-center justify-between rounded-md border border-border bg-surface-subtle px-3 py-1.5 text-sm dark:border-border-dark dark:bg-surface-dark-subtle"
+                >
+                  <span className="flex items-center gap-2 truncate">
+                    <FileIcon className="h-4 w-4 shrink-0 text-ink-subtle" />
+                    <span className="truncate">{file.name}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeFile(i)}
+                    className="ml-2 shrink-0 text-ink-subtle hover:text-danger-600"
+                    aria-label={`Remove ${file.name}`}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-ink-subtle">
+              {files.length > 0 ? `${files.length} file(s) queued` : 'No files queued'}
+            </span>
+            <Button onClick={runJob} disabled={files.length === 0 || isRunning} loading={isRunning}>
+              <Play className="h-4 w-4" />
+              Run Pipeline
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {jobs.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold text-ink dark:text-ink-inverted">Run History</h3>
+          <AnimatePresence initial={false}>
+            {jobs.map((job) => (
+              <motion.div
+                key={job.id}
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <JobCard job={job} />
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function JobCard({ job }: { job: PipelineJob }) {
+  const [logsOpen, setLogsOpen] = useState(false)
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <CardTitle className="text-sm">Run #{job.runNumber}</CardTitle>
+            <p className="mt-0.5 text-xs text-ink-subtle">{job.fileNames.join(', ')}</p>
+          </div>
+          <span
+            className={cn(
+              'rounded-full px-2 py-0.5 text-xs font-medium',
+              job.status === 'running' && 'bg-accent-50 text-accent-700 dark:bg-accent-900/30 dark:text-accent-200',
+              job.status === 'done' && 'bg-success-50 text-success-700 dark:bg-success-700/20 dark:text-success-400',
+              job.status === 'error' && 'bg-danger-50 text-danger-700 dark:bg-danger-700/20 dark:text-danger-400',
+            )}
+          >
+            {job.status === 'running' ? 'Running' : job.status === 'done' ? 'Complete' : 'Failed'}
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3 pt-0">
+        <PipelineProgress steps={job.steps} />
+
+        {job.summary && (
+          <div className="flex flex-wrap gap-2">
+            {[
+              ['Documents', job.summary.documents],
+              ['Elements', job.summary.elements],
+              ['Nodes', job.summary.nodes],
+              ['Edges', job.summary.edges],
+              ['Coverage Items', job.summary.coverage_items],
+              ['Elapsed', formatElapsed(job.summary.elapsed)],
+            ].map(([label, value]) => (
+              <span
+                key={label as string}
+                className="rounded-md border border-border bg-surface-subtle px-2 py-1 text-xs text-ink-muted dark:border-border-dark dark:bg-surface-dark-subtle dark:text-ink-subtle"
+              >
+                <span className="font-medium text-ink dark:text-ink-inverted">{value}</span> {label}
+              </span>
+            ))}
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setLogsOpen((o) => !o)}
+          className="flex items-center gap-1 text-xs font-medium text-ink-muted hover:text-ink dark:text-ink-subtle dark:hover:text-ink-inverted"
+        >
+          {logsOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          {logsOpen ? 'Hide logs' : `Show logs (${job.logs.length})`}
+        </button>
+
+        <AnimatePresence initial={false}>
+          {logsOpen && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.15 }}
+              className="overflow-hidden"
+            >
+              <ScrollArea className="h-40 rounded-md border border-border bg-slate-950 dark:border-border-dark">
+                <div className="p-3 font-mono text-xs leading-relaxed text-slate-300">
+                  {job.logs.map((line, i) => (
+                    <div key={i} className={cn(line.level === 'error' && 'text-danger-400')}>
+                      <span className="text-slate-500">[{line.time}]</span> {line.text}
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </CardContent>
+    </Card>
+  )
+}
