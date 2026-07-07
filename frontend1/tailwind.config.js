@@ -21,13 +21,13 @@ export default {
         },
         border: {
           DEFAULT: '#e2e8f0', // slate-200
-          dark: '#2a2a2e', // low-contrast, blends with dark-subtle rather than outlining it
+          dark: '#34343a', // visible enough to define card/table edges without being harsh
         },
         ink: {
           DEFAULT: '#0f172a', // slate-900 — primary text
           muted: '#475569', // slate-600 — secondary text
-          subtle: '#9a9aa2', // neutral gray — tertiary/placeholder (dark mode)
-          inverted: '#e6e6e9', // dimmed off-white, neutral hue — avoids glare of pure-white text
+          subtle: '#aeaeb6', // neutral gray — tertiary/placeholder; lightened for dark-mode legibility
+          inverted: '#ececee', // off-white, neutral hue — avoids glare of pure-white text
         },
         // Disciplined single accent for primary actions/focus — a muted, desaturated
         // teal rather than blue, so it reads as calm/professional, not "tech-SaaS blue."
