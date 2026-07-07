@@ -30,9 +30,6 @@ from api.deps import get_doc_service, get_graph_service
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}")
 
-_COORD_WINDOW: float = 6.0
-
-
 @dataclasses.dataclass
 class _ExtractionResult:
     run_id: str
@@ -42,45 +39,58 @@ class _ExtractionResult:
     done: asyncio.Event = dataclasses.field(default_factory=asyncio.Event)
     relationships: list = dataclasses.field(default_factory=list)
     batch_size: int = 0
+    node_count: int = 0
+    edge_count: int = 0
 
 
 class _Coordinator:
+    """
+    Per-workspace coordinator for cross-document relationship extraction.
+
+    Concurrent pipeline runs each submit their newly-extracted elements here.
+    Rather than firing on a fixed quiescence window (which silently drops
+    cross-document relationships whenever two uploads' extraction steps
+    happen to finish more than the window apart — near-guaranteed once
+    documents vary in size/OCR cost), the first submitter to acquire
+    ``_graph_lock`` becomes the leader: it drains *everything* pending at
+    that moment (including anything that queued while it waited for the
+    lock) into one batch, and — critically — performs the existing-elements
+    read, LLM cross-doc extraction, and Neo4j write all inside that same
+    lock. That makes read-then-write atomic per workspace: whichever run
+    acquires the lock next is guaranteed to see every previously-submitted
+    document already committed, so cross-document relationships are never
+    silently missed regardless of how the submissions are timed.
+    """
+
     def __init__(self) -> None:
-        self._lock = asyncio.Lock()
         self._pending: list[_ExtractionResult] = []
-        self._timer: asyncio.Task | None = None
+        self._pending_lock = asyncio.Lock()
+        self._graph_lock = asyncio.Lock()
 
     async def submit_and_wait(self, result: _ExtractionResult, workspace_id: str) -> None:
-        async with self._lock:
+        async with self._pending_lock:
             self._pending.append(result)
-            if self._timer and not self._timer.done():
-                self._timer.cancel()
-            self._timer = asyncio.create_task(
-                self._fire_after_quiescence(workspace_id)
-            )
-        await result.done.wait()
 
-    async def pending_count(self) -> int:
-        async with self._lock:
-            return len(self._pending)
+        async with self._graph_lock:
+            async with self._pending_lock:
+                if result.done.is_set():
+                    # Already handled as part of another leader's batch
+                    # while we were waiting for the lock.
+                    return
+                batch = list(self._pending)
+                self._pending.clear()
+            await self._execute(batch, workspace_id)
 
-    async def _fire_after_quiescence(self, workspace_id: str) -> None:
-        await asyncio.sleep(_COORD_WINDOW)
-        await self._execute(workspace_id)
-
-    async def _execute(self, workspace_id: str) -> None:
-        async with self._lock:
-            if not self._pending:
-                return
-            batch = list(self._pending)
-            self._pending.clear()
-            self._timer = None
-
+    async def _execute(self, batch: list[_ExtractionResult], workspace_id: str) -> None:
         doc_svc = get_doc_service()
         graph_svc = get_graph_service(workspace_id)
 
         all_new = [e for r in batch for e in r.elements]
         new_ids = {e.id for e in all_new}
+        all_docs = [d for r in batch for d in r.docs]
+        merged_hashes: dict = {}
+        for r in batch:
+            merged_hashes.update(r.hashes)
 
         try:
             existing = await asyncio.to_thread(graph_svc.store.get_all_elements, workspace_id)
@@ -92,9 +102,22 @@ class _Coordinator:
             logger.warning("Coordinator cross-doc extraction failed for workspace %s: %s", workspace_id, exc)
             relationships = []
 
+        node_count = edge_count = 0
+        try:
+            await asyncio.to_thread(
+                graph_svc.builder.build_from_elements,
+                all_new, relationships, all_docs, workspace_id, merged_hashes,
+            )
+            node_count = await asyncio.to_thread(graph_svc.get_node_count)
+            edge_count = await asyncio.to_thread(graph_svc.get_edge_count)
+        except Exception as exc:
+            logger.warning("Coordinator graph write failed for workspace %s: %s", workspace_id, exc)
+
         for r in batch:
             r.relationships = relationships
             r.batch_size = len(batch)
+            r.node_count = node_count
+            r.edge_count = edge_count
             r.done.set()
 
 
@@ -107,6 +130,13 @@ def _get_coordinator(workspace_id: str) -> _Coordinator:
     if workspace_id not in _coordinators:
         _coordinators[workspace_id] = _Coordinator()
     return _coordinators[workspace_id]
+
+
+# Public alias — other ingestion entry points (e.g. services/synthetic_import.py's
+# "import from Synthetic Library" flow) must submit into this SAME per-workspace
+# coordinator, not a pipeline-local one, so a manual upload and a synthetic import
+# landing at the same time are still coordinated into one cross-doc extraction pass.
+get_coordinator = _get_coordinator
 
 
 def _get_write_lock(workspace_id: str) -> asyncio.Lock:
@@ -300,9 +330,8 @@ async def _stream_pipeline(
             coordinator.submit_and_wait(result, workspace_id)
         )
 
-        pending_count = await coordinator.pending_count()
         yield _sse({"type": "step_progress", "step": "graph",
-                    "message": f"Queued for cross-document analysis — {pending_count} pipeline(s) in batch, waiting for quiescence window…",
+                    "message": "Queued for cross-document analysis — waiting for any concurrent uploads to this workspace…",
                     "current": 0, "total": len(elements)})
         await asyncio.sleep(0)
 
@@ -312,7 +341,7 @@ async def _stream_pipeline(
             if not submit_task.done() and not sent_running:
                 sent_running = True
                 yield _sse({"type": "step_progress", "step": "graph",
-                            "message": "Running cross-document relationship extraction via LLM…",
+                            "message": "Running cross-document relationship extraction and merging into Neo4j…",
                             "current": 0, "total": len(elements)})
                 await asyncio.sleep(0)
 
@@ -320,6 +349,8 @@ async def _stream_pipeline(
 
         relationships = result.relationships
         batch_size = result.batch_size
+        node_count = result.node_count
+        edge_count = result.edge_count
         batch_note = f" (shared batch of {batch_size} pipelines)" if batch_size > 1 else ""
 
         rel_type_counts: dict[str, int] = {}
@@ -332,25 +363,8 @@ async def _stream_pipeline(
                     "message": (
                         f"Found {len(relationships)} relationship(s){batch_note}"
                         + (f"  [{rel_detail}]" if rel_detail else "")
-                        + " — writing to Neo4j…"
+                        + f" — graph updated: {node_count} total nodes · {edge_count} total edges in workspace"
                     ),
-                    "current": len(elements), "total": len(elements)})
-        await asyncio.sleep(0)
-
-        async with write_lock:
-            yield _sse({"type": "step_progress", "step": "graph",
-                        "message": f"Merging {len(elements)} nodes + {len(relationships)} edges into Neo4j…",
-                        "current": len(elements), "total": len(elements)})
-            await asyncio.sleep(0)
-            await asyncio.to_thread(
-                graph_svc.builder.build_from_elements,
-                elements, relationships, docs, workspace_id, new_hashes,
-            )
-            node_count = await asyncio.to_thread(graph_svc.get_node_count)
-            edge_count = await asyncio.to_thread(graph_svc.get_edge_count)
-
-        yield _sse({"type": "step_progress", "step": "graph",
-                    "message": f"Graph updated — {node_count} total nodes · {edge_count} total edges in workspace",
                     "current": len(elements), "total": len(elements)})
         await asyncio.sleep(0)
 

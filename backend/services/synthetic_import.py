@@ -2,29 +2,37 @@
 Workspace-side import of a published synthetic document.
 
 Pulls a document from the shared Synthetic Data Studio document store and
-runs it through the SAME extraction + graph-build path a real file upload
-takes (:class:`extractors.LLMExtractor` → :meth:`GraphService.build_knowledge_graph`),
-so ingestion is genuinely exercised end-to-end rather than the document being
-injected as a shortcut. Elements land tagged with a real, queryable
-`synthetic` property (see `graph.neo4j_store.Neo4jGraphStore.add_element`) and
-the document's display name carries a `_gen` marker.
+runs it through the SAME extraction path a real file upload takes
+(:class:`extractors.LLMExtractor`). The actual graph write and cross-document
+relationship extraction happen through the workspace's shared pipeline
+coordinator (see ``api/routes/pipeline.py``) rather than a direct,
+un-coordinated ``build_knowledge_graph`` call — otherwise an import running
+concurrently with another import or a manual upload could each write straight
+to Neo4j without ever comparing notes, so no relationship between them would
+ever be extracted. Elements land tagged with a real, queryable `synthetic`
+property (see `graph.neo4j_store.Neo4jGraphStore.add_element`) and the
+document's display name carries a `_gen` marker.
 """
 from __future__ import annotations
 
 import hashlib
 import logging
 
-from core.models import DocumentType, PageContent, ParsedDocument
-from extractors import LLMExtractor
-from synthetic import db as synthetic_db
-from synthetic.storage import get_artifact_store
+from core.models import AtomicElement, DocumentType, PageContent, ParsedDocument
 
 logger = logging.getLogger(__name__)
 
-_extractor = LLMExtractor()  # amortise OpenAI client init, same pattern as DocumentService
 
+def prepare_synthetic_import(
+    workspace_id: str, store_document_id: str
+) -> tuple[ParsedDocument, list[AtomicElement], str]:
+    """Parse + LLM-extract a published synthetic document. No graph write —
+    caller is responsible for submitting the result to the workspace's
+    pipeline coordinator so it's merged atomically with any concurrent runs."""
+    from extractors import LLMExtractor
+    from synthetic import db as synthetic_db
+    from synthetic.storage import get_artifact_store
 
-def import_synthetic_document(workspace_id: str, store_document_id: str) -> dict:
     entry = synthetic_db.get_store_document(store_document_id)
     if entry is None:
         raise ValueError(f"store document {store_document_id} not found")
@@ -43,22 +51,12 @@ def import_synthetic_document(workspace_id: str, store_document_id: str) -> dict
     )
     content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
 
-    elements = _extractor.extract_elements(parsed)
+    elements = LLMExtractor().extract_elements(parsed)
     for el in elements:
         el.metadata = {**el.metadata, "synthetic": True, "tag": "_gen"}
 
-    from api.deps import get_graph_service  # lazy import — avoid an import cycle
-    gs = get_graph_service(workspace_id)
-    gs.build_knowledge_graph([parsed], elements, [], {doc_id: content_hash})
-
-    synthetic_db.mark_store_document_imported(store_document_id, workspace_id)
-
     logger.info(
-        "Imported synthetic document %s into workspace %s (%d elements)",
+        "Prepared synthetic document %s for import into workspace %s (%d elements)",
         store_document_id, workspace_id, len(elements),
     )
-    return {
-        "workspace_id": workspace_id, "document_id": doc_id, "title": parsed.name,
-        "elements": len(elements),
-        "nodes": gs.get_node_count(), "edges": gs.get_edge_count(),
-    }
+    return parsed, elements, content_hash

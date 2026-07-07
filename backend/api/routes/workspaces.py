@@ -60,13 +60,41 @@ async def update_ws(workspace_id: str, body: WorkspaceUpdate) -> dict:
 @router.post("/{workspace_id}/import-synthetic/{store_document_id}")
 async def import_synthetic(workspace_id: str, store_document_id: str) -> dict:
     """Pull a published synthetic document from the shared Studio document
-    store into this workspace, running it through the real extraction +
-    graph-build pipeline (same path a real file upload takes)."""
-    from services.synthetic_import import import_synthetic_document
+    store into this workspace, running it through the real extraction
+    pipeline (same path a real file upload takes) and merging it through the
+    workspace's shared pipeline coordinator — so concurrent imports/uploads
+    into the same workspace still get their cross-document relationships
+    extracted, instead of each racing straight to Neo4j on its own."""
+    import uuid
+
+    from api.routes.pipeline import _ExtractionResult, _get_write_lock, get_coordinator
+    from services.synthetic_import import prepare_synthetic_import
+    from synthetic import db as synthetic_db
+
     try:
-        return await asyncio.to_thread(import_synthetic_document, workspace_id, store_document_id)
+        parsed, elements, content_hash = await asyncio.to_thread(
+            prepare_synthetic_import, workspace_id, store_document_id
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+    result = _ExtractionResult(
+        run_id=str(uuid.uuid4()), elements=elements, docs=[parsed],
+        hashes={parsed.id: content_hash},
+    )
+    await get_coordinator(workspace_id).submit_and_wait(result, workspace_id)
+
+    gs = get_graph_service(workspace_id)
+    async with _get_write_lock(workspace_id):
+        await asyncio.to_thread(gs.vector_store.upsert, elements)
+
+    await asyncio.to_thread(synthetic_db.mark_store_document_imported, store_document_id, workspace_id)
+
+    return {
+        "workspace_id": workspace_id, "document_id": parsed.id, "title": parsed.name,
+        "elements": len(elements),
+        "nodes": result.node_count, "edges": result.edge_count,
+    }
 
 
 @router.delete("/{workspace_id}")
