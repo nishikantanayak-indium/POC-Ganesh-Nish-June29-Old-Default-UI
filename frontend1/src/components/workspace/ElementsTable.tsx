@@ -198,7 +198,7 @@ export function ElementsTable({ elements }: ElementsTableProps) {
                         {style.label}
                       </Badge>
                     </TableCell>
-                    <TableCell className="font-mono text-xs">
+                    <TableCell className="font-mono text-xs text-ink-muted dark:text-ink-subtle">
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <span>{truncate(el.id, 18)}</span>

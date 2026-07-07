@@ -13,9 +13,19 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
+  /* Base fallback colors — any element that forgets an explicit dark: text/bg
+     override inherits these instead of invisible dark-navy-on-near-black. */
   body {
-    @apply bg-surface-subtle text-ink font-sans antialiased;
+    @apply bg-surface-subtle text-ink font-sans antialiased dark:bg-surface-dark dark:text-ink-inverted;
     font-feature-settings: 'tnum' 1;
+  }
+
+  /* Light text on a dark background optically reads thinner than the same
+     weight on a light background — nudging the base body weight up in dark
+     mode keeps small/secondary text legible without touching headings or
+     anything that already sets its own font-weight utility. */
+  .dark body {
+    font-weight: 500;
   }
 
   * {
