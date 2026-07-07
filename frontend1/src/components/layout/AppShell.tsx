@@ -26,7 +26,7 @@ export function AppShell() {
                   className={({ isActive }) =>
                     cn(
                       'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink dark:text-ink-subtle dark:hover:bg-surface-dark-subtle dark:hover:text-ink-inverted',
-                      isActive && 'bg-navy-50 text-navy-800 hover:bg-navy-50 hover:text-navy-800 dark:bg-navy-900/40 dark:text-navy-200 dark:hover:bg-navy-900/40 dark:hover:text-navy-200',
+                      isActive && 'bg-slate-50 text-slate-800 hover:bg-slate-50 hover:text-slate-800 dark:bg-slate-900/40 dark:text-slate-200 dark:hover:bg-slate-900/40 dark:hover:text-slate-200',
                     )
                   }
                 >

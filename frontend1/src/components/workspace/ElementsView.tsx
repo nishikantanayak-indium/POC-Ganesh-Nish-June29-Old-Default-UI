@@ -172,7 +172,7 @@ export function ElementsView({ workspaceId }: ElementsViewProps) {
                   onClick={() => setSelectedDocId(doc.id)}
                   className={cn(
                     'flex flex-col gap-1 rounded-md px-3 py-2 text-left transition-colors hover:bg-surface-muted dark:hover:bg-surface-dark-subtle',
-                    isSelected && 'bg-navy-50 dark:bg-navy-900/40'
+                    isSelected && 'bg-slate-50 dark:bg-slate-900/40'
                   )}
                 >
                   <div className="flex items-center gap-2">
@@ -180,7 +180,7 @@ export function ElementsView({ workspaceId }: ElementsViewProps) {
                     <span
                       className={cn(
                         'truncate text-sm font-medium text-ink dark:text-ink-inverted',
-                        isSelected && 'text-navy-800 dark:text-navy-200'
+                        isSelected && 'text-slate-800 dark:text-slate-200'
                       )}
                     >
                       {doc.name}

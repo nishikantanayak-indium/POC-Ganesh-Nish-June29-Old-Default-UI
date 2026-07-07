@@ -215,7 +215,7 @@ function WorkspaceCard({ workspace }: { workspace: Workspace }) {
       >
         <CardHeader className="flex-row items-start justify-between space-y-0">
           <div className="flex items-start gap-3">
-            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-navy-50 text-navy-700 dark:bg-navy-900/40 dark:text-navy-200">
+            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-slate-50 text-slate-700 dark:bg-slate-900/40 dark:text-slate-200">
               <Layers className="h-4.5 w-4.5" />
             </div>
             <div>
@@ -291,7 +291,7 @@ export function WorkspacesPage() {
         ) : workspaces.length === 0 ? (
           <Card className="mx-auto max-w-md py-8 text-center">
             <CardContent className="flex flex-col items-center gap-3 pt-5">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-navy-50 text-navy-700 dark:bg-navy-900/40 dark:text-navy-200">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-50 text-slate-700 dark:bg-slate-900/40 dark:text-slate-200">
                 <Layers className="h-6 w-6" />
               </div>
               <CardTitle>No workspaces yet</CardTitle>

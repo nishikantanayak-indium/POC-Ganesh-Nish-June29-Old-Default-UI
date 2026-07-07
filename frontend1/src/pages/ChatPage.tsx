@@ -91,7 +91,7 @@ function ConversationRow({ conversation, active, onSelect, onRename, onDelete }:
       className={cn(
         'group flex items-center gap-1 rounded-md px-2 py-1.5 text-sm',
         active
-          ? 'bg-navy-50 text-navy-800 dark:bg-navy-900/40 dark:text-navy-200'
+          ? 'bg-slate-50 text-slate-800 dark:bg-slate-900/40 dark:text-slate-200'
           : 'text-ink-muted hover:bg-surface-muted hover:text-ink dark:text-ink-subtle dark:hover:bg-surface-dark-muted dark:hover:text-ink-inverted'
       )}
     >

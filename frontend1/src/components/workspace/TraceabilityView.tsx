@@ -185,7 +185,7 @@ export function TraceabilityView({ workspaceId }: TraceabilityViewProps) {
                   className={cn(
                     'flex w-full flex-col gap-1 rounded-md border px-3 py-2 text-left text-sm transition-colors',
                     active
-                      ? 'border-navy-300 bg-navy-50 dark:border-navy-700 dark:bg-navy-900/40'
+                      ? 'border-slate-300 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/40'
                       : 'border-transparent hover:bg-surface-muted dark:hover:bg-surface-dark-muted'
                   )}
                 >

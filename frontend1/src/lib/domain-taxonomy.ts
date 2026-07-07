@@ -21,9 +21,9 @@ export const ELEMENT_TYPE_STYLES: Record<ElementType, Swatch> = {
   },
   Requirement: {
     label: 'Requirement',
-    badgeClass: 'bg-navy-50 text-navy-700 border-navy-200 dark:bg-navy-900/40 dark:text-navy-200 dark:border-navy-700',
-    dotClass: 'bg-navy-600',
-    textClass: 'text-navy-700 dark:text-navy-300',
+    badgeClass: 'bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-900/40 dark:text-slate-200 dark:border-slate-700',
+    dotClass: 'bg-slate-600',
+    textClass: 'text-slate-700 dark:text-slate-300',
   },
   Clause: {
     label: 'Clause',
@@ -150,9 +150,9 @@ export const SME_VERDICT_STYLES: Record<SMEVerdict, Swatch> = {
 
 export const PUBLISHED_STYLE: Swatch = {
   label: 'Published',
-  badgeClass: 'bg-navy-50 text-navy-700 border-navy-200 dark:bg-navy-900/40 dark:text-navy-200 dark:border-navy-700',
-  dotClass: 'bg-navy-600',
-  textClass: 'text-navy-700 dark:text-navy-300',
+  badgeClass: 'bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-900/40 dark:text-slate-200 dark:border-slate-700',
+  dotClass: 'bg-slate-600',
+  textClass: 'text-slate-700 dark:text-slate-300',
 }
 
 export function elementStyle(type: ElementType): Swatch {

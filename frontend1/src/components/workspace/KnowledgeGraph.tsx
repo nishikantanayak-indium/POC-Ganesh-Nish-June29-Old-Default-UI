@@ -39,12 +39,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 // Hex color maps — React Flow renders edges as raw SVG, so Tailwind utility
 // classes (which resolve at build time to CSS, not JS-readable values) can't
 // be used for `stroke`. These mirror the semantic tokens in domain-taxonomy.ts
-// (danger/success/warning/info/slate/navy/accent) as literal hex values.
+// (danger/success/warning/info/slate/accent) as literal hex values.
 // ---------------------------------------------------------------------------
 const ELEMENT_HEX: Record<ElementType, string> = {
   Document: '#94a3b8', // slate-400
-  Requirement: '#213A59', // navy-700
-  Clause: '#3568f0', // accent-500
+  Requirement: '#334155', // slate-700
+  Clause: '#3d8678', // accent-500
   Risk: '#dc2626', // danger-500
   Mitigation: '#16a34a', // success-500
   LD: '#d97706', // warning-500

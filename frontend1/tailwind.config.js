@@ -13,46 +13,35 @@ export default {
           DEFAULT: '#ffffff',
           subtle: '#f8fafc', // slate-50
           muted: '#f1f5f9', // slate-100
-          dark: '#0f172a', // slate-900
-          'dark-subtle': '#1e293b', // slate-800
-          'dark-muted': '#334155', // slate-700
+          // Dark mode: a graduated true-neutral-gray elevation ladder (base → card → hover),
+          // each step ~4-5% lighter. Zero blue/navy hue — a warm-neutral charcoal, not slate.
+          dark: '#0c0c0d', // page base — near-black neutral gray
+          'dark-subtle': '#17171a', // cards / dialogs / popovers — one step up
+          'dark-muted': '#212124', // hover / active states — two steps up
         },
         border: {
           DEFAULT: '#e2e8f0', // slate-200
-          dark: '#334155', // slate-700
+          dark: '#2a2a2e', // low-contrast, blends with dark-subtle rather than outlining it
         },
         ink: {
           DEFAULT: '#0f172a', // slate-900 — primary text
           muted: '#475569', // slate-600 — secondary text
-          subtle: '#94a3b8', // slate-400 — tertiary/placeholder
-          inverted: '#f8fafc',
+          subtle: '#9a9aa2', // neutral gray — tertiary/placeholder (dark mode)
+          inverted: '#e6e6e9', // dimmed off-white, neutral hue — avoids glare of pure-white text
         },
-        // Authoritative navy — primary chrome, headers, active nav.
-        navy: {
-          50: '#f0f4f9',
-          100: '#dae3ee',
-          200: '#b7c8dd',
-          300: '#8ea6c6',
-          400: '#5f7fa8',
-          500: '#3f5f87',
-          600: '#2c4a6e',
-          700: '#213A59',
-          800: '#182B42',
-          900: '#101D2C',
-          950: '#0a141d',
-        },
-        // Disciplined single accent for primary actions/focus.
+        // Disciplined single accent for primary actions/focus — a muted, desaturated
+        // teal rather than blue, so it reads as calm/professional, not "tech-SaaS blue."
         accent: {
-          50: '#eef4ff',
-          100: '#dae7ff',
-          200: '#b9d2ff',
-          300: '#8cb4ff',
-          400: '#5c8fff',
-          500: '#3568f0',
-          600: '#254fcc',
-          700: '#1f3fa3',
-          800: '#1d3684',
-          900: '#1c306b',
+          50: '#eef6f4',
+          100: '#d7ebe6',
+          200: '#b0d7cd',
+          300: '#84beb1',
+          400: '#5aa294',
+          500: '#3d8678',
+          600: '#306b60',
+          700: '#28564d',
+          800: '#224540',
+          900: '#1d3a35',
         },
         // Semantic status — reused across pipeline, coverage, risk, SME verdicts, chat intents.
         success: {

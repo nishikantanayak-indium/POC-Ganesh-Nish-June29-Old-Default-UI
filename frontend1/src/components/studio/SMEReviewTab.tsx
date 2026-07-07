@@ -432,7 +432,7 @@ export function SMEReviewTab({ projectId }: SMEReviewTabProps) {
                 className="flex h-full flex-col gap-4"
               >
                 {selectedDoc.status === 'published' && (
-                  <div className="flex items-center justify-between gap-3 rounded-md border border-navy-200 bg-navy-50 px-3 py-2 dark:border-navy-700 dark:bg-navy-900/30">
+                  <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
                     <span className={cn('inline-flex items-center gap-1.5 text-sm font-medium', PUBLISHED_STYLE.textClass)}>
                       <span className={cn('h-1.5 w-1.5 rounded-full', PUBLISHED_STYLE.dotClass)} />
                       Published to the shared store — read-only until recalled.

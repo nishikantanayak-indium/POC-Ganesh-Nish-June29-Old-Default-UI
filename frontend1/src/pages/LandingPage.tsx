@@ -45,7 +45,7 @@ const STEPS = [
 
 function GraphPreview() {
   const nodes = [
-    { label: 'Requirement', sub: 'REQ_014', badge: 'bg-navy-50 text-navy-700 border-navy-200 dark:bg-navy-900/40 dark:text-navy-200 dark:border-navy-700', x: 8, y: 18 },
+    { label: 'Requirement', sub: 'REQ_014', badge: 'bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-900/40 dark:text-slate-200 dark:border-slate-700', x: 8, y: 18 },
     { label: 'Clause', sub: 'CL_009', badge: 'bg-accent-50 text-accent-700 border-accent-200 dark:bg-accent-900/30 dark:text-accent-200 dark:border-accent-800', x: 52, y: 8 },
     { label: 'Risk', sub: 'RISK_002', badge: 'bg-danger-50 text-danger-700 border-danger-100 dark:bg-danger-700/20 dark:text-danger-400 dark:border-danger-700/40', x: 58, y: 52 },
     { label: 'Mitigation', sub: 'MIT_005', badge: 'bg-success-50 text-success-700 border-success-100 dark:bg-success-700/20 dark:text-success-400 dark:border-success-700/40', x: 14, y: 68 },
@@ -80,7 +80,7 @@ export function LandingPage() {
       {/* Hero */}
       <div className="grid items-center gap-12 lg:grid-cols-[1.1fr_1fr]">
         <div>
-          <div className="mb-4 inline-flex items-center gap-1.5 rounded-full border border-navy-200 bg-navy-50 px-3 py-1 text-xs font-medium text-navy-700 dark:border-navy-700 dark:bg-navy-900/40 dark:text-navy-200">
+          <div className="mb-4 inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-200">
             <ShieldCheck className="h-3.5 w-3.5" />
             Contract Intelligence Platform
           </div>
@@ -113,7 +113,7 @@ export function LandingPage() {
       <div className="mt-24 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
         {FEATURES.map((f) => (
           <div key={f.title}>
-            <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-md bg-navy-50 text-navy-700 dark:bg-navy-900/40 dark:text-navy-200">
+            <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-md bg-slate-50 text-slate-700 dark:bg-slate-900/40 dark:text-slate-200">
               <f.icon className="h-4.5 w-4.5" />
             </div>
             <h3 className="text-sm font-semibold text-ink dark:text-white">{f.title}</h3>
@@ -146,7 +146,7 @@ export function LandingPage() {
       <div className="grid gap-6 sm:grid-cols-2">
         <Card hoverable className="flex flex-col">
           <CardHeader>
-            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-md bg-navy-50 text-navy-700 dark:bg-navy-900/40 dark:text-navy-200">
+            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-md bg-slate-50 text-slate-700 dark:bg-slate-900/40 dark:text-slate-200">
               <LayoutGrid className="h-5 w-5" />
             </div>
             <CardTitle>Analysis Workspaces</CardTitle>
