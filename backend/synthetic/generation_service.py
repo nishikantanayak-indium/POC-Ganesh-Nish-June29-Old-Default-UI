@@ -541,6 +541,7 @@ class SyntheticDataGenerationService:
         industries: Optional[List[str]] = None,
         languages: Optional[List[str]] = None,
         brief: Optional[str] = None,
+        note: Optional[str] = None,
         min_sections: int = 4,
         max_sections: int = 9,
     ) -> tuple[SyntheticDocument, str]:
@@ -560,6 +561,9 @@ class SyntheticDataGenerationService:
         brief_block = ""
         if brief and brief.strip():
             brief_block = f"\n\nUSER BRIEF — honour every requirement below in the generated document:\n{brief.strip()}"
+        note_block = ""
+        if note and note.strip():
+            note_block = f"\n\nADDITIONAL GUIDANCE — applies to this whole generation run:\n{note.strip()}"
 
         system = (
             f"You are a senior procurement contract author generating a realistic synthetic "
@@ -572,7 +576,7 @@ class SyntheticDataGenerationService:
             "Set 'industry' and 'language' to reflect what you chose."
         )
         data = self._call(
-            system, f"Generate one complete {doc_type.value} document." + brief_block + seed_block,
+            system, f"Generate one complete {doc_type.value} document." + brief_block + note_block + seed_block,
             _generate_document_tool(), "emit_document",
             max_tokens=6000, temperature=0.85,
         )

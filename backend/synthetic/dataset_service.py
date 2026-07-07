@@ -321,10 +321,11 @@ class SyntheticDatasetManagementService:
 
         industries = knobs.get("industries")
         languages = knobs.get("languages")
+        note = knobs.get("note", "")
         seed_docs = (project.seed_summary or {}).get("documents", [])
 
         dataset = db.get_or_create_default_dataset(project_id)
-        version = db.create_version(project_id, dataset.id, note=knobs.get("note", ""))
+        version = db.create_version(project_id, dataset.id, note=note)
         progress_cb({"stage": "start", "message": f"Version v{version.version_no} created",
                      "version_id": version.id})
 
@@ -354,6 +355,7 @@ class SyntheticDatasetManagementService:
                 doc, markdown = self.gen.generate_document(
                     project_id, dtype, version_id=version.id,
                     seeds=seeds or None, industries=industries, languages=languages, brief=brief,
+                    note=note,
                 )
                 key = self._doc_key(project_id, dataset.id, version.version_no, doc.id)
                 doc.artifact_uri = self.store.put_text(key, markdown, "text/markdown")
