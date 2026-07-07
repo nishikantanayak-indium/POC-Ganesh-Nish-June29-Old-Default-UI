@@ -10,16 +10,18 @@ import { cn } from '@/lib/utils'
 import { getProject, listVersions } from '@/api/studio'
 import { GenerateTab } from '@/components/studio/GenerateTab'
 import { SMEReviewTab } from '@/components/studio/SMEReviewTab'
+import { ValidationTab } from '@/components/studio/ValidationTab'
 
-type TabKey = 'generate' | 'review'
+type TabKey = 'generate' | 'validate' | 'review'
 
-const VALID_TABS: TabKey[] = ['generate', 'review']
+const VALID_TABS: TabKey[] = ['generate', 'validate', 'review']
 
 export function StudioProjectPage() {
   const { projectId, tab } = useParams<{ projectId: string; tab?: string }>()
   const navigate = useNavigate()
 
   const activeTab: TabKey = VALID_TABS.includes(tab as TabKey) ? (tab as TabKey) : 'generate'
+  const [hasVisitedValidate, setHasVisitedValidate] = useState(activeTab === 'validate')
   const [hasVisitedReview, setHasVisitedReview] = useState(activeTab === 'review')
 
   const { data: project, isLoading: projectLoading } = useQuery({
@@ -37,11 +39,12 @@ export function StudioProjectPage() {
   const hasGenerated = (versionsData?.versions.length ?? 0) > 0
 
   useEffect(() => {
+    if (activeTab === 'validate') setHasVisitedValidate(true)
     if (activeTab === 'review') setHasVisitedReview(true)
   }, [activeTab])
 
   const handleTabChange = (next: string) => {
-    if (next === 'review' && !hasGenerated) return
+    if ((next === 'validate' || next === 'review') && !hasGenerated) return
     navigate(`/studio/project/${projectId}/${next}`, { replace: true })
   }
 
@@ -67,6 +70,20 @@ export function StudioProjectPage() {
         <TabsList>
           <TabsTrigger value="generate">Generate</TabsTrigger>
           {hasGenerated ? (
+            <TabsTrigger value="validate">Validate</TabsTrigger>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span>
+                  <TabsTrigger value="validate" disabled>
+                    Validate
+                  </TabsTrigger>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Generate documents first</TooltipContent>
+            </Tooltip>
+          )}
+          {hasGenerated ? (
             <TabsTrigger value="review">Review</TabsTrigger>
           ) : (
             <Tooltip>
@@ -87,6 +104,14 @@ export function StudioProjectPage() {
             <GenerateTab projectId={projectId} />
           </div>
         </TabsContent>
+
+        {hasVisitedValidate && (
+          <TabsContent value="validate" forceMount className={cn(activeTab !== 'validate' && 'hidden')}>
+            <div className="mx-auto max-w-5xl">
+              <ValidationTab projectId={projectId} />
+            </div>
+          </TabsContent>
+        )}
 
         {hasVisitedReview && (
           <TabsContent value="review" forceMount className={cn(activeTab !== 'review' && 'hidden')}>

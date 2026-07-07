@@ -87,3 +87,9 @@ desktop.ini
 logs/
 tmp/
 temp/
+
+Data_Samples/
+
+.claude/
+
+*.xlsx

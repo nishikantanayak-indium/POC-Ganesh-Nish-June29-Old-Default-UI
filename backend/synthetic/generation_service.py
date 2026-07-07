@@ -173,6 +173,87 @@ def _generate_document_tool(with_key_facts: bool = False) -> dict:
     }
 
 
+_VALIDATION_DIMENSION_DESCRIPTIONS = {
+    "structural_fidelity": (
+        "Does the document's section order/shape genuinely mirror the structural template it "
+        "was given? 'aspect' = a specific source section or structural expectation being checked."
+    ),
+    "instruction_adherence": (
+        "Was each requirement in the user's brief/note actually honoured in the document? "
+        "'aspect' = one specific requirement extracted from the brief/note."
+    ),
+    "deal_consistency": (
+        "Does this document genuinely restate the SAME specific figures/terms from the covered "
+        "facts (not paraphrased away), AND correctly omit the held-back facts? 'aspect' = one "
+        "specific fact — for a held-back fact, verdict='strong' means it was correctly and "
+        "deliberately NOT mentioned, not that it was found."
+    ),
+    "realism": (
+        "Does the document read as an authentic, internally consistent contract artifact with "
+        "no contradictions or placeholder/generic filler? 'aspect' = one specific realism "
+        "observation (e.g. a section that reads authentically, or one that doesn't)."
+    ),
+}
+
+
+def _validate_document_tool(dimensions: List[str]) -> dict:
+    evidence_item = {
+        "type": "object",
+        "properties": {
+            "aspect": {"type": "string"},
+            "quote": {
+                "type": "string",
+                "description": "A verbatim substring copied from the document text supporting this "
+                                "judgment. Empty string if verdict is 'weak' and nothing supports it. "
+                                "Never invent or paraphrase a quote — copy it exactly.",
+            },
+            "verdict": {"type": "string", "enum": ["strong", "partial", "weak"]},
+        },
+        "required": ["aspect", "verdict"],
+    }
+    dim_props = {}
+    for dim in dimensions:
+        dim_props[dim] = {
+            "type": "object",
+            "description": _VALIDATION_DIMENSION_DESCRIPTIONS[dim],
+            "properties": {
+                "score": {"type": "number", "minimum": 0, "maximum": 1},
+                "summary": {"type": "string"},
+                "evidence": {"type": "array", "items": evidence_item},
+            },
+            "required": ["score", "summary", "evidence"],
+        }
+    return {
+        "type": "function",
+        "function": {
+            "name": "emit_validation",
+            "description": (
+                "Score the generated document against ONLY the requested validation dimensions, "
+                "citing evidence quoted verbatim from the document text. Never score or fabricate "
+                "evidence for a dimension that isn't listed below."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": dim_props,
+                "required": list(dim_props.keys()),
+            },
+        },
+    }
+
+
+def _quote_appears_in(quote: str, text: str) -> bool:
+    """Cheap, concrete anti-hallucination check — a cited quote must actually be a
+    substring of the document, not just plausible-sounding. Normalizes whitespace
+    so line-wrapping differences don't cause false negatives."""
+    q = " ".join(quote.split()).strip().lower()
+    if not q:
+        return False
+    return q in " ".join(text.split()).lower()
+
+
+_ALL_VALIDATION_DIMENSIONS = ["structural_fidelity", "instruction_adherence", "deal_consistency", "realism"]
+
+
 @dataclass
 class DealContext:
     """Concrete facts carried forward from an earlier document in a linked
@@ -727,3 +808,109 @@ class SyntheticDataGenerationService:
         )
         logger.info("Generated document %s (%s, %d sections)", doc.id, doc_type.value, len(sections))
         return doc, markdown, key_facts
+
+    # ------------------------------------------------------------------
+    # Validation — evidence-backed LLM-as-judge, run right after generation
+    # ------------------------------------------------------------------
+
+    def validate_document(
+        self,
+        doc_type: DocumentType,
+        markdown: str,
+        brief: Optional[str] = None,
+        note: Optional[str] = None,
+        structure_hint: Optional[StructureHint] = None,
+        deal_context: Optional[DealContext] = None,
+    ) -> dict:
+        """
+        Score a just-generated document on whichever validation dimensions
+        actually apply to it — never a dimension with nothing to check it
+        against. Every score is backed by evidence quoted verbatim from the
+        document; quotes that don't actually appear in the text (checked in
+        Python, not just prompted for) are downgraded rather than trusted.
+        """
+        instructions_text = "\n".join(
+            t.strip() for t in [brief, note] if t and t.strip()
+        )
+        dimensions: List[str] = ["realism"]
+        if structure_hint is not None:
+            dimensions.append("structural_fidelity")
+        if instructions_text:
+            dimensions.append("instruction_adherence")
+        if deal_context is not None:
+            dimensions.append("deal_consistency")
+
+        reference_blocks: List[str] = []
+        if "structural_fidelity" in dimensions:
+            if structure_hint.full_text:
+                reference_blocks.append(
+                    f"STRUCTURAL TEMPLATE this document was asked to mirror ('{structure_hint.source_name}'), "
+                    f"given in full:\n{structure_hint.full_text}"
+                )
+            elif structure_hint.section_headings:
+                headings = "\n".join(f"{i+1}. {h}" for i, h in enumerate(structure_hint.section_headings))
+                reference_blocks.append(
+                    f"STRUCTURAL TEMPLATE this document was asked to mirror ('{structure_hint.source_name}')"
+                    f" — section order only:\n{headings}"
+                )
+        if "instruction_adherence" in dimensions:
+            reference_blocks.append(f"USER BRIEF/NOTE this document was asked to honour:\n{instructions_text}")
+        if "deal_consistency" in dimensions:
+            covered = "\n".join(f"- {f}" for f in deal_context.covered_facts) or "(none)"
+            held_back = "\n".join(f"- {f}" for f in deal_context.held_back_facts) or "(none)"
+            reference_blocks.append(
+                f"DEAL FACTS from the earlier {deal_context.source_label} — this document should "
+                f"explicitly restate the ones below marked 'covered' (matching figures, not vaguer "
+                f"paraphrases) and correctly NOT mention the ones marked 'held back' "
+                f"(a deliberate coverage gap):\nCovered facts:\n{covered}\nHeld-back facts:\n{held_back}"
+            )
+
+        system = (
+            "You are an exacting QA reviewer for synthetic procurement documents. Score ONLY the "
+            f"dimensions listed here: {dimensions}. For each, follow the scoring guidance and cite "
+            "evidence quoted VERBATIM (copy-pasted, not paraphrased) from the document below. If "
+            "nothing in the document supports a claim, use an empty quote and verdict='weak' — never "
+            "invent a quote. Base every judgment strictly on the reference material and document "
+            "actually provided; do not assume content that isn't given."
+        )
+        user = f"DOCUMENT ({doc_type.value}):\n{markdown}"
+        if reference_blocks:
+            user += "\n\n" + "\n\n".join(reference_blocks)
+
+        result: Dict[str, dict] = {
+            dim: {"applicable": dim in dimensions} for dim in _ALL_VALIDATION_DIMENSIONS
+        }
+        try:
+            data = self._call(
+                system, user, _validate_document_tool(dimensions), "emit_validation",
+                max_tokens=3000, temperature=0,
+            )
+            scores: List[float] = []
+            for dim in dimensions:
+                raw = data.get(dim) or {}
+                evidence = []
+                for e in raw.get("evidence", []):
+                    quote = str(e.get("quote", "")).strip()
+                    verdict = e.get("verdict") if e.get("verdict") in ("strong", "partial", "weak") else "weak"
+                    if quote and not _quote_appears_in(quote, markdown):
+                        quote, verdict = "", "weak"
+                    evidence.append({"aspect": str(e.get("aspect", "")).strip(), "quote": quote, "verdict": verdict})
+                score = max(0.0, min(1.0, float(raw.get("score", 0.5))))
+                scores.append(score)
+                result[dim] = {
+                    "applicable": True, "score": round(score, 3),
+                    "summary": str(raw.get("summary", "")).strip(), "evidence": evidence,
+                }
+            overall = round(sum(scores) / len(scores), 3) if scores else None
+            return {
+                "model": self.model, "requested_dimensions": dimensions,
+                "overall_score": overall, "dimensions": result, "error": None,
+            }
+        except Exception as exc:
+            logger.warning("Document validation failed for %s: %s", doc_type.value, exc)
+            return {
+                "model": self.model, "requested_dimensions": dimensions,
+                "overall_score": None,
+                "dimensions": {dim: {"applicable": False} for dim in _ALL_VALIDATION_DIMENSIONS},
+                "error": str(exc),
+            }

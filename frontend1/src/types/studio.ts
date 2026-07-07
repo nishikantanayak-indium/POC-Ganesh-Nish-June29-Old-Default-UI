@@ -107,19 +107,52 @@ export interface DocGenKnobs {
   deal_count?: number
 }
 
-export type GenStage = 'queued' | 'running' | 'validating' | 'scoring' | 'done' | 'error'
+// Mirrors the actual stage strings emitted by backend/api/routes/synthetic.py's
+// generate-documents SSE stream and dataset_service.py's progress_cb calls.
+export type GenStage = 'queued' | 'generate' | 'validate' | 'persist' | 'complete' | 'done' | 'error'
 
 export interface GenEvent {
   stage: GenStage
   message?: string
-  progress?: number
+  current?: number
+  total?: number
+  cell?: string
   summary?: {
     version_id: string
+    version_no: number
+    requested: number
     generated: number
-    approved: number
-    rejected: number
+    staged: number
+    documents: number
+    distribution: Record<string, { generated: number; threshold: number }>
   }
   error?: string
+}
+
+export interface ValidationEvidence {
+  aspect: string
+  quote: string
+  verdict: 'strong' | 'partial' | 'weak'
+}
+
+export interface ValidationDimension {
+  applicable: boolean
+  score?: number
+  summary?: string
+  evidence?: ValidationEvidence[]
+}
+
+export interface ValidationReport {
+  model?: string
+  requested_dimensions?: string[]
+  overall_score: number | null
+  dimensions: {
+    structural_fidelity: ValidationDimension
+    instruction_adherence: ValidationDimension
+    deal_consistency: ValidationDimension
+    realism: ValidationDimension
+  }
+  error?: string | null
 }
 
 export interface SyntheticRecordT {

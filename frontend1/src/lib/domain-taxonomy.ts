@@ -166,3 +166,50 @@ export function relationshipStyle(type: RelationshipType): Swatch {
 export function coverageStyle(status: CoverageStatus): Swatch {
   return COVERAGE_STATUS_STYLES[status] ?? COVERAGE_STATUS_STYLES['Not Covered']
 }
+
+export type ValidationScoreTier = 'high' | 'medium' | 'low'
+
+export const VALIDATION_SCORE_STYLES: Record<ValidationScoreTier, Swatch> = {
+  high: {
+    label: 'High',
+    badgeClass: 'bg-success-50 text-success-700 border-success-100 dark:bg-success-700/20 dark:text-success-400 dark:border-success-700/40',
+    dotClass: 'bg-success-500',
+    textClass: 'text-success-600',
+  },
+  medium: {
+    label: 'Medium',
+    badgeClass: 'bg-warning-50 text-warning-700 border-warning-100 dark:bg-warning-700/20 dark:text-warning-400 dark:border-warning-700/40',
+    dotClass: 'bg-warning-500',
+    textClass: 'text-warning-600',
+  },
+  low: {
+    label: 'Low',
+    badgeClass: 'bg-danger-50 text-danger-700 border-danger-100 dark:bg-danger-700/20 dark:text-danger-400 dark:border-danger-700/40',
+    dotClass: 'bg-danger-500',
+    textClass: 'text-danger-600',
+  },
+}
+
+export const VALIDATION_SCORE_UNSCORED: Swatch = {
+  label: 'N/A',
+  badgeClass: 'bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-900/40 dark:text-slate-300 dark:border-slate-700',
+  dotClass: 'bg-slate-400',
+  textClass: 'text-slate-500',
+}
+
+export function validationScoreStyle(score: number | null | undefined): Swatch {
+  if (score === null || score === undefined) return VALIDATION_SCORE_UNSCORED
+  if (score >= 0.75) return VALIDATION_SCORE_STYLES.high
+  if (score >= 0.5) return VALIDATION_SCORE_STYLES.medium
+  return VALIDATION_SCORE_STYLES.low
+}
+
+export const VALIDATION_VERDICT_STYLES: Record<'strong' | 'partial' | 'weak', Swatch> = {
+  strong: VALIDATION_SCORE_STYLES.high,
+  partial: VALIDATION_SCORE_STYLES.medium,
+  weak: VALIDATION_SCORE_STYLES.low,
+}
+
+export function validationVerdictStyle(verdict: 'strong' | 'partial' | 'weak'): Swatch {
+  return VALIDATION_VERDICT_STYLES[verdict] ?? VALIDATION_VERDICT_STYLES.weak
+}

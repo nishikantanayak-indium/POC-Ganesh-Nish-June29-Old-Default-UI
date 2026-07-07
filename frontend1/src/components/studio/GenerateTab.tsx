@@ -1,15 +1,20 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   FileStack,
   FileText,
   Link2,
+  Loader2,
   Plus,
   Trash2,
   Upload,
+  type LucideIcon,
 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
@@ -18,6 +23,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Select,
   SelectContent,
@@ -50,22 +56,29 @@ interface GenerateTabProps {
   projectId: string
 }
 
-const STAGE_LABELS: Record<GenStage, string> = {
-  queued: 'Queued',
-  running: 'Generating documents',
-  validating: 'Validating',
-  scoring: 'Quality scoring',
-  done: 'Complete',
-  error: 'Failed',
+// Coarse stage tracker — mirrors the visual convention already established in
+// workspace/PipelineProgress.tsx (chip row, colored by status), with Studio's
+// own stage set instead of the Analysis pipeline's parse/extract/graph/vector.
+const STAGE_TRACKER: { id: GenStage; label: string }[] = [
+  { id: 'queued', label: 'Queued' },
+  { id: 'generate', label: 'Generate' },
+  { id: 'validate', label: 'Validate' },
+  { id: 'persist', label: 'Persist' },
+  { id: 'done', label: 'Done' },
+]
+
+function stageRank(stage: GenStage | undefined): number {
+  const idx = STAGE_TRACKER.findIndex((s) => s.id === (stage === 'complete' ? 'done' : stage))
+  return idx === -1 ? 0 : idx
 }
 
-const STAGE_PROGRESS: Record<GenStage, number> = {
-  queued: 5,
-  running: 40,
-  validating: 70,
-  scoring: 90,
-  done: 100,
-  error: 100,
+interface TimedEvent {
+  time: string
+  event: GenEvent
+}
+
+function nowStamp() {
+  return new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 let targetRowId = 0
@@ -312,9 +325,17 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
   const [languages, setLanguages] = useState('')
   const [note, setNote] = useState('')
 
-  const [event, setEvent] = useState<GenEvent | null>(null)
+  const [events, setEvents] = useState<TimedEvent[]>([])
+  const [logOpen, setLogOpen] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+  const logEndRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (logOpen) logEndRef.current?.scrollIntoView({ block: 'end' })
+  }, [events, logOpen])
+
+  const lastEvent = events.length > 0 ? events[events.length - 1].event : null
 
   const addRow = () => {
     setRows((prev) => [...prev, { id: nextRowId(), doc_type: meta?.doc_types[0] ?? '', count: 5, brief: '' }])
@@ -364,7 +385,8 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
     const controller = new AbortController()
     abortRef.current = controller
     setIsGenerating(true)
-    setEvent({ stage: 'queued', message: 'Starting generation…', progress: 0 })
+    setLogOpen(true)
+    setEvents([{ time: nowStamp(), event: { stage: 'queued', message: 'Starting generation…' } }])
 
     try {
       await generateDocuments(
@@ -372,13 +394,13 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
         targets,
         knobs,
         (e) => {
-          setEvent(e)
+          setEvents((prev) => [...prev, { time: nowStamp(), event: e }])
           if (e.stage === 'done') {
             queryClient.invalidateQueries({ queryKey: ['studio', 'project', projectId, 'versions'] })
             queryClient.invalidateQueries({ queryKey: ['studio', 'project', projectId, 'documents'] })
             toast({
               title: 'Generation complete',
-              description: 'Switch to the Review tab to send documents through SME review.',
+              description: 'See how each document scored in Validation, then approve in Review.',
               variant: 'success',
             })
           }
@@ -386,18 +408,31 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
         controller.signal,
       )
     } catch (err) {
-      setEvent({
-        stage: 'error',
-        error: err instanceof Error ? err.message : 'Generation failed. Please try again.',
-      })
+      setEvents((prev) => [
+        ...prev,
+        {
+          time: nowStamp(),
+          event: {
+            stage: 'error',
+            error: err instanceof Error ? err.message : 'Generation failed. Please try again.',
+          },
+        },
+      ])
     } finally {
       setIsGenerating(false)
       abortRef.current = null
     }
   }
 
-  const stage = event?.stage
-  const progress = stage ? (event?.progress ?? STAGE_PROGRESS[stage]) : 0
+  const stage = lastEvent?.stage
+  const progress =
+    lastEvent?.current !== undefined && lastEvent?.total
+      ? Math.round((lastEvent.current / lastEvent.total) * 100)
+      : stage === 'done' || stage === 'complete'
+        ? 100
+        : stage === 'queued'
+          ? 5
+          : 0
 
   return (
     <Card>
@@ -530,47 +565,89 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
         </div>
 
         <AnimatePresence>
-          {event && (
+          {events.length > 0 && (
             <motion.div
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.2 }}
             >
-              {event.stage === 'error' ? (
+              {stage === 'error' ? (
                 <Card className="border-danger-200 bg-danger-50 dark:border-danger-700/40 dark:bg-danger-700/10">
                   <CardContent className="flex items-start gap-3 pt-5">
                     <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-danger-600 dark:text-danger-400" />
                     <div>
                       <p className="text-sm font-medium text-danger-700 dark:text-danger-400">Generation failed</p>
-                      <p className="mt-1 text-sm text-ink-muted">{event.error ?? 'An unknown error occurred.'}</p>
+                      <p className="mt-1 text-sm text-ink-muted">{lastEvent?.error ?? 'An unknown error occurred.'}</p>
                     </div>
                   </CardContent>
                 </Card>
               ) : (
                 <Card>
-                  <CardContent className="space-y-3 pt-5">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="font-medium text-ink dark:text-ink-inverted">{STAGE_LABELS[event.stage]}</span>
-                      <span className="text-ink-subtle">{Math.round(progress)}%</span>
-                    </div>
-                    <Progress value={progress} variant={event.stage === 'done' ? 'success' : 'default'} />
-                    {event.message && <p className="text-xs text-ink-subtle">{event.message}</p>}
+                  <CardContent className="space-y-4 pt-5">
+                    <StageTracker current={stage} />
 
-                    {event.stage === 'done' && event.summary && (
+                    <div>
+                      <div className="mb-1.5 flex items-center justify-between text-sm">
+                        <span className="font-medium text-ink dark:text-ink-inverted">
+                          {lastEvent?.message ?? 'Working…'}
+                        </span>
+                        <span className="text-ink-subtle">{progress}%</span>
+                      </div>
+                      <Progress value={progress} variant={stage === 'done' ? 'success' : 'default'} />
+                    </div>
+
+                    {lastEvent?.stage === 'done' && lastEvent.summary && (
                       <div className="flex flex-wrap gap-3 pt-1">
                         <div className="flex items-center gap-2 rounded-md border border-border bg-surface-subtle px-3 py-1.5 text-sm dark:border-border-dark dark:bg-surface-dark-subtle">
                           <CheckCircle2 className="h-4 w-4 text-success-600 dark:text-success-400" />
-                          Generated <span className="font-semibold">{event.summary.generated}</span>
+                          Requested <span className="font-semibold">{lastEvent.summary.requested}</span>
                         </div>
                         <div className="flex items-center gap-2 rounded-md border border-border bg-surface-subtle px-3 py-1.5 text-sm dark:border-border-dark dark:bg-surface-dark-subtle">
-                          Approved <span className="font-semibold text-success-700 dark:text-success-400">{event.summary.approved}</span>
+                          Generated <span className="font-semibold text-success-700 dark:text-success-400">{lastEvent.summary.generated}</span>
                         </div>
                         <div className="flex items-center gap-2 rounded-md border border-border bg-surface-subtle px-3 py-1.5 text-sm dark:border-border-dark dark:bg-surface-dark-subtle">
-                          Rejected <span className="font-semibold text-danger-700 dark:text-danger-400">{event.summary.rejected}</span>
+                          Staged <span className="font-semibold">{lastEvent.summary.staged}</span>
                         </div>
                       </div>
                     )}
+
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => setLogOpen((o) => !o)}
+                        className="flex items-center gap-1 text-xs font-medium text-ink-muted hover:text-ink dark:text-ink-subtle dark:hover:text-ink-inverted"
+                      >
+                        {logOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                        {logOpen ? 'Hide log' : `Show log (${events.length})`}
+                      </button>
+                      <AnimatePresence initial={false}>
+                        {logOpen && (
+                          <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            exit={{ opacity: 0, height: 0 }}
+                            transition={{ duration: 0.15 }}
+                            className="mt-2 overflow-hidden"
+                          >
+                            <ScrollArea className="h-48 rounded-md border border-border bg-slate-950 dark:border-border-dark">
+                              <div className="p-3 font-mono text-xs leading-relaxed text-slate-300">
+                                {events.map((e, i) => (
+                                  <div
+                                    key={i}
+                                    className={cn(e.event.stage === 'error' && 'text-danger-400')}
+                                  >
+                                    <span className="text-slate-500">[{e.time}]</span>{' '}
+                                    {e.event.message ?? e.event.error ?? e.event.stage}
+                                  </div>
+                                ))}
+                                <div ref={logEndRef} />
+                              </div>
+                            </ScrollArea>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
                   </CardContent>
                 </Card>
               )}
@@ -579,6 +656,54 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
         </AnimatePresence>
       </CardContent>
     </Card>
+  )
+}
+
+const STAGE_TRACKER_ICONS: Record<GenStage, LucideIcon> = {
+  queued: Loader2,
+  generate: FileText,
+  validate: CheckCircle2,
+  persist: FileStack,
+  complete: Check,
+  done: Check,
+  error: AlertTriangle,
+}
+
+function StageTracker({ current }: { current: GenStage | undefined }) {
+  const rank = stageRank(current)
+  return (
+    <div className="flex items-stretch">
+      {STAGE_TRACKER.map((s, i) => {
+        const Icon = STAGE_TRACKER_ICONS[s.id]
+        const isDone = i < rank || current === 'done' || current === 'complete'
+        const isActive = i === rank && current !== 'done' && current !== 'complete'
+        const isLast = i === STAGE_TRACKER.length - 1
+        return (
+          <div key={s.id} className="flex flex-1 items-center">
+            <div
+              className={cn(
+                'flex min-w-[80px] flex-1 flex-col items-center gap-1 rounded-md border px-2 py-1.5 text-center transition-colors',
+                isDone
+                  ? 'border-success-100 bg-success-50 text-success-700 dark:border-success-700/40 dark:bg-success-700/20 dark:text-success-400'
+                  : isActive
+                    ? 'border-accent-200 bg-accent-50 text-accent-700 dark:border-accent-800 dark:bg-accent-900/30 dark:text-accent-200'
+                    : 'border-border bg-surface text-ink-subtle dark:border-border-dark dark:bg-surface-dark-subtle',
+              )}
+            >
+              {isDone ? (
+                <Check className="h-3.5 w-3.5" />
+              ) : isActive ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Icon className="h-3.5 w-3.5" />
+              )}
+              <span className="text-[11px] font-medium leading-tight">{s.label}</span>
+            </div>
+            {!isLast && <div className="mx-1 h-px w-3 flex-none bg-border dark:bg-border-dark sm:w-6" />}
+          </div>
+        )
+      })}
+    </div>
   )
 }
 

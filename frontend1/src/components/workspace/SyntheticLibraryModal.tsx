@@ -1,23 +1,16 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { AlertCircle, Check, FlaskConical, Loader2, Plus } from 'lucide-react'
+import { AlertCircle, Check, FlaskConical, Loader2, Plus, Search } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
-import { getStoreDocuments } from '@/api/studio'
+import { getMeta, getStoreDocuments } from '@/api/studio'
 import { useImportStatus, useSyntheticImportStore } from '@/store/syntheticImportStore'
 import type { StoreDocument } from '@/types/studio'
-
-const DOC_TYPE_OPTIONS = [
-  { value: 'all', label: 'All document types' },
-  { value: 'contract', label: 'Contract' },
-  { value: 'requirements', label: 'Requirements' },
-  { value: 'bid', label: 'Bid' },
-  { value: 'amendment', label: 'Amendment' },
-]
 
 interface SyntheticLibraryModalProps {
   workspaceId: string
@@ -86,6 +79,14 @@ function LibraryRow({
 
 export function SyntheticLibraryModal({ workspaceId, workspaceName, open, onOpenChange }: SyntheticLibraryModalProps) {
   const [docType, setDocType] = useState('all')
+  const [search, setSearch] = useState('')
+
+  const { data: meta } = useQuery({
+    queryKey: ['studio', 'meta'],
+    queryFn: () => getMeta(),
+    enabled: open,
+  })
+  const docTypeOptions = meta?.doc_types ?? []
 
   const { data, isLoading } = useQuery({
     queryKey: ['studio', 'store-documents', docType],
@@ -93,11 +94,16 @@ export function SyntheticLibraryModal({ workspaceId, workspaceName, open, onOpen
     enabled: open,
   })
 
-  const documents = data?.documents ?? []
+  const documents = useMemo(() => {
+    const all = data?.documents ?? []
+    const q = search.trim().toLowerCase()
+    if (!q) return all
+    return all.filter((doc) => doc.title.toLowerCase().includes(q))
+  }, [data, search])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="flex max-h-[85vh] max-w-3xl flex-col">
         <DialogHeader>
           <DialogTitle>Synthetic Library</DialogTitle>
           <DialogDescription>
@@ -105,33 +111,49 @@ export function SyntheticLibraryModal({ workspaceId, workspaceName, open, onOpen
           </DialogDescription>
         </DialogHeader>
 
-        <Select value={docType} onValueChange={setDocType}>
-          <SelectTrigger className="w-56">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {DOC_TYPE_OPTIONS.map((opt) => (
-              <SelectItem key={opt.value} value={opt.value}>
-                {opt.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-subtle" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by title…"
+              className="pl-8"
+            />
+          </div>
+          <Select value={docType} onValueChange={setDocType}>
+            <SelectTrigger className="w-56 shrink-0">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All document types</SelectItem>
+              {docTypeOptions.map((dt) => (
+                <SelectItem key={dt} value={dt}>
+                  {dt}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
         {isLoading ? (
           <div className="space-y-2">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-14 w-full" />
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-16 w-full" />
             ))}
           </div>
         ) : documents.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-10 text-center">
             <FlaskConical className="h-8 w-8 text-ink-subtle" />
-            <p className="text-sm font-medium text-ink dark:text-ink-inverted">No synthetic documents found</p>
-            <p className="text-xs text-ink-subtle">Publish documents from the Synthetic Data Studio to see them here.</p>
+            <p className="text-sm font-medium text-ink dark:text-ink-inverted">
+              {search ? 'No documents match your search' : 'No synthetic documents found'}
+            </p>
+            <p className="text-xs text-ink-subtle">
+              {search ? 'Try a different title or clear the search.' : 'Publish documents from the Synthetic Data Studio to see them here.'}
+            </p>
           </div>
         ) : (
-          <ScrollArea className="h-96">
+          <ScrollArea className="flex-1 min-h-[24rem]">
             <div className="space-y-2 pr-3">
               {documents.map((doc) => (
                 <LibraryRow key={doc.id} doc={doc} workspaceId={workspaceId} workspaceName={workspaceName} />

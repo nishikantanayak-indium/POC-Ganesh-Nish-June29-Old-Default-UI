@@ -18,6 +18,7 @@ testable and easy to evolve.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import io
 import json
 import logging
@@ -66,6 +67,22 @@ ProgressCB = Callable[[dict], None]
 
 def _noop(_: dict) -> None:  # pragma: no cover
     pass
+
+
+def _with_heartbeat(fn: Callable[[], object], emit: Callable[[str], None],
+                     running_message: str, interval: float = 2.0) -> object:
+    """Run a blocking call (an LLM request) on a worker thread while the
+    caller keeps emitting periodic progress messages — otherwise a 10-60s
+    OpenAI call reads as total silence to anyone watching the SSE stream."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(fn)
+        elapsed = 0.0
+        while True:
+            try:
+                return fut.result(timeout=interval)
+            except concurrent.futures.TimeoutError:
+                elapsed += interval
+                emit(f"{running_message} ({int(elapsed)}s elapsed)")
 
 
 class SyntheticDatasetManagementService:
@@ -375,15 +392,19 @@ class SyntheticDatasetManagementService:
             total_target = deal_count * 3  # RFP + Contract + RiskSheet per deal
             done = 0
             for deal_no in range(1, deal_count + 1):
+                def _deal_progress(msg: str, current: Optional[int] = None, stage: str = "generate") -> None:
+                    progress_cb({
+                        "stage": stage, "message": f"Deal {deal_no}/{deal_count}: {msg}",
+                        "current": done + (current or 0), "total": total_target, "cell": "deal",
+                    })
+
                 deal_docs = self._generate_linked_deal(
                     project_id, version.id, industries, languages, note,
                     seeds_for=_seeds_for, structure_hint_for=_structure_hint_for,
-                    progress_cb=lambda msg, current=None: progress_cb({
-                        "stage": "generate", "message": f"Deal {deal_no}/{deal_count}: {msg}",
-                        "current": done + (current or 0), "total": total_target, "cell": "deal",
-                    }),
+                    progress_cb=_deal_progress,
                 )
                 for doc in deal_docs:
+                    _deal_progress(f"writing {doc.doc_type.value} to storage…", stage="persist")
                     key = self._doc_key(project_id, dataset.id, version.version_no, doc.id)
                     # markdown is stashed in provenance by _generate_linked_deal, pop it back out
                     markdown = doc.provenance.pop("_markdown")
@@ -403,15 +424,47 @@ class SyntheticDatasetManagementService:
                     continue
                 brief = target.get("brief") or ""
                 seeds = _seeds_for(dtype)
+                hint = _structure_hint_for(dtype)
 
                 for i in range(count):
-                    progress_cb({"stage": "generate", "message": f"Generating {dtype.value} {i + 1}/{count}",
-                                 "current": done, "total": total_target, "cell": dtype.value})
-                    doc, markdown, _facts = self.gen.generate_document(
-                        project_id, dtype, version_id=version.id,
-                        seeds=seeds or None, industries=industries, languages=languages, brief=brief,
-                        note=note, structure_hint=_structure_hint_for(dtype),
+                    base_evt = {"current": done, "total": total_target, "cell": dtype.value}
+
+                    def _emit(message: str, stage: str = "generate") -> None:
+                        progress_cb({"stage": stage, "message": message, **base_evt})
+
+                    _emit(
+                        f"Preparing {dtype.value} {i + 1}/{count} — brief: "
+                        f"{'yes' if brief.strip() else 'no'}, structure template: "
+                        f"{hint.source_name if hint else 'none'}, seed tone examples: {len(seeds)}"
                     )
+                    doc, markdown, _facts = _with_heartbeat(
+                        lambda: self.gen.generate_document(
+                            project_id, dtype, version_id=version.id,
+                            seeds=seeds or None, industries=industries, languages=languages, brief=brief,
+                            note=note, structure_hint=hint,
+                        ),
+                        _emit, f"Drafting {dtype.value} {i + 1}/{count} via LLM",
+                    )
+                    word_count = len(markdown.split())
+                    _emit(f"{dtype.value} drafted — {len(doc.sections)} sections, ~{word_count} words")
+
+                    dims_preview = ["realism"] + (["structural fidelity"] if hint else []) + \
+                        (["instruction adherence"] if (brief.strip() or note.strip()) else [])
+                    _emit(f"Validating {dtype.value} — checking {', '.join(dims_preview)}…", stage="validate")
+                    validation = _with_heartbeat(
+                        lambda: self.gen.validate_document(
+                            dtype, markdown, brief=brief, note=note, structure_hint=hint,
+                        ),
+                        lambda m: _emit(m, stage="validate"), f"Validating {dtype.value}",
+                    )
+                    doc.provenance["validation"] = validation
+                    if validation.get("error"):
+                        _emit(f"{dtype.value}: validation failed ({validation['error']})", stage="validate")
+                    else:
+                        pct = round((validation.get("overall_score") or 0) * 100)
+                        _emit(f"{dtype.value} validated — overall score {pct}%", stage="validate")
+
+                    _emit(f"Writing {dtype.value} to storage…", stage="persist")
                     key = self._doc_key(project_id, dataset.id, version.version_no, doc.id)
                     doc.artifact_uri = self.store.put_text(key, markdown, "text/markdown")
                     doc.provenance["artifact_key"] = key
@@ -458,7 +511,7 @@ class SyntheticDatasetManagementService:
         languages: Optional[List[str]],
         note: str,
         seeds_for: Callable[[DocumentType], List[str]],
-        progress_cb: Callable[[str, Optional[int]], None],
+        progress_cb: Callable[..., None],
         structure_hint_for: Optional[Callable[[DocumentType], Optional[StructureHint]]] = None,
         covered_ratio: float = 0.75,
     ) -> List[SyntheticDocument]:
@@ -482,26 +535,53 @@ class SyntheticDatasetManagementService:
             n_covered = max(1, round(len(texts) * covered_ratio)) if texts else 0
             return texts[:n_covered], texts[n_covered:]
 
+        def _draft(step_no: int, dtype: DocumentType, hint: Optional[StructureHint], **gen_kwargs):
+            deal_ctx = gen_kwargs.get("deal_context")
+            progress_cb(
+                f"preparing {dtype.value} — structure template: {hint.source_name if hint else 'none'}, "
+                f"deal context: {'yes' if deal_ctx else 'no (source document)'}", step_no,
+            )
+            doc, md, facts = _with_heartbeat(
+                lambda: self.gen.generate_document(
+                    project_id, dtype, version_id=version_id,
+                    industries=industries, languages=languages, note=note,
+                    structure_hint=hint, **gen_kwargs,
+                ),
+                lambda m: progress_cb(m, step_no), f"Drafting {dtype.value} via LLM",
+            )
+            word_count = len(md.split())
+            progress_cb(f"{dtype.value} drafted — {len(doc.sections)} sections, ~{word_count} words", step_no)
+
+            dims_preview = ["realism"] + (["structural fidelity"] if hint else []) + \
+                (["deal consistency"] if deal_ctx else [])
+            progress_cb(f"Validating {dtype.value} — checking {', '.join(dims_preview)}…", step_no, "validate")
+            validation = _with_heartbeat(
+                lambda: self.gen.validate_document(
+                    dtype, md, note=note, structure_hint=hint, deal_context=deal_ctx,
+                ),
+                lambda m: progress_cb(m, step_no, "validate"), f"Validating {dtype.value}",
+            )
+            doc.provenance["validation"] = validation
+            if validation.get("error"):
+                progress_cb(f"{dtype.value}: validation failed ({validation['error']})", step_no, "validate")
+            else:
+                pct = round((validation.get("overall_score") or 0) * 100)
+                progress_cb(f"{dtype.value} validated — overall score {pct}%", step_no, "validate")
+            return doc, md, facts
+
         # 1. RFP — the source of the deal's concrete requirements.
-        progress_cb("generating RFP", 1)
-        rfp_doc, rfp_md, rfp_facts = self.gen.generate_document(
-            project_id, DocumentType.RFP, version_id=version_id,
-            seeds=seeds_for(DocumentType.RFP) or None,
-            industries=industries, languages=languages, note=note,
-            structure_hint=structure_hint_for(DocumentType.RFP) if structure_hint_for else None,
-            emit_key_facts=True,
+        rfp_doc, rfp_md, rfp_facts = _draft(
+            1, DocumentType.RFP, structure_hint_for(DocumentType.RFP) if structure_hint_for else None,
+            seeds=seeds_for(DocumentType.RFP) or None, emit_key_facts=True,
         )
         rfp_doc.provenance.update({"deal_id": deal_id, "deal_role": "source"})
         rfp_doc.provenance["_markdown"] = rfp_md
         rfp_covered, rfp_held_back = _split(rfp_facts)
 
         # 2. Contract — responds to the RFP, covering most (not all) of its facts.
-        progress_cb("generating Contract", 2)
-        contract_doc, contract_md, contract_facts = self.gen.generate_document(
-            project_id, DocumentType.CONTRACT, version_id=version_id,
+        contract_doc, contract_md, contract_facts = _draft(
+            2, DocumentType.CONTRACT, structure_hint_for(DocumentType.CONTRACT) if structure_hint_for else None,
             seeds=seeds_for(DocumentType.CONTRACT) or None,
-            industries=industries, languages=languages, note=note,
-            structure_hint=structure_hint_for(DocumentType.CONTRACT) if structure_hint_for else None,
             deal_context=DealContext("RFP", covered_facts=rfp_covered, held_back_facts=rfp_held_back),
             emit_key_facts=True,
         )
@@ -513,12 +593,9 @@ class SyntheticDatasetManagementService:
         contract_covered, contract_held_back = _split(contract_facts)
 
         # 3. RiskSheet — analyzes the Contract's clauses, leaving some risks unmitigated.
-        progress_cb("generating RiskSheet", 3)
-        risk_doc, risk_md, _risk_facts = self.gen.generate_document(
-            project_id, DocumentType.RISK_SHEET, version_id=version_id,
+        risk_doc, risk_md, _risk_facts = _draft(
+            3, DocumentType.RISK_SHEET, structure_hint_for(DocumentType.RISK_SHEET) if structure_hint_for else None,
             seeds=seeds_for(DocumentType.RISK_SHEET) or None,
-            industries=industries, languages=languages, note=note,
-            structure_hint=structure_hint_for(DocumentType.RISK_SHEET) if structure_hint_for else None,
             deal_context=DealContext(
                 "Contract", covered_facts=contract_covered, held_back_facts=contract_held_back,
             ),
