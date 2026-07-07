@@ -1,6 +1,6 @@
 import { useEffect, useState, type ComponentProps } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { Check, X, Pencil, Send, Download } from 'lucide-react'
+import { Check, X, Pencil, Send, Download, Undo2 } from 'lucide-react'
 import clsx from 'clsx'
 import { exportUrls } from '../../api/client'
 import type { SyntheticDocumentT } from '../../types'
@@ -49,12 +49,13 @@ interface Props {
   onReject?: () => void
   onSaveEdit?: (markdown: string, title: string) => void
   onPublish?: () => void
+  onRecall?: () => void
   comment: string
   onCommentChange: (v: string) => void
 }
 
 export default function DocumentViewer({
-  doc, markdown, loading, busy, onApprove, onReject, onSaveEdit, onPublish, comment, onCommentChange,
+  doc, markdown, loading, busy, onApprove, onReject, onSaveEdit, onPublish, onRecall, comment, onCommentChange,
 }: Props) {
   const [editing, setEditing] = useState(false)
   const [draftMarkdown, setDraftMarkdown] = useState(markdown)
@@ -165,7 +166,16 @@ export default function DocumentViewer({
       )}
 
       {doc.status === 'published' && (
-        <p className="text-xs text-primary flex items-center gap-1.5"><Check size={13} /> Sent to document storage.</p>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <p className="text-xs text-primary flex items-center gap-1.5"><Check size={13} /> Sent to document storage.</p>
+          {onRecall && (
+            <button onClick={onRecall} disabled={busy}
+              title="Remove from Document Storage and reopen for editing"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-card text-muted border border-border hover:text-foreground disabled:opacity-50">
+              <Undo2 size={12} /> Bring back to edit
+            </button>
+          )}
+        </div>
       )}
     </div>
   )

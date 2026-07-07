@@ -434,6 +434,17 @@ export async function publishDocuments(documentIds: string[]): Promise<{ publish
   return r.json()
 }
 
+export async function recallDocument(documentId: string): Promise<{
+  document_id: string
+  status: string
+  removed_from_store: number
+  imported_into: { workspace_id: string; at: string }[]
+}> {
+  const r = await fetch(`${studio}/documents/${documentId}/recall`, { method: 'POST' })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
 export function streamGenerateDocuments(
   projectId: string,
   docTargets: DocGenTarget[],

@@ -1116,3 +1116,33 @@ def mark_store_document_imported(store_document_id: str, workspace_id: str) -> N
             (json.dumps(imports), store_document_id),
         )
         conn.commit()
+
+
+def recall_document_from_store(document_id: str) -> dict:
+    """Undo a publish: remove the document's row(s) from the shared store and
+    revert the source document to SME_APPROVED so it becomes editable again.
+
+    Returns the count of store rows removed and any workspaces the document had
+    already been imported into (those imports are independent copies and are
+    intentionally left untouched — the caller surfaces this as a warning)."""
+    _ensure_init()
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT imported_into FROM synthetic_document_store WHERE source_document_id = %s",
+            (document_id,),
+        )
+        imported_into: List[dict] = []
+        for r in cur.fetchall():
+            if r["imported_into"]:
+                imported_into.extend(r["imported_into"])
+        cur.execute(
+            "DELETE FROM synthetic_document_store WHERE source_document_id = %s",
+            (document_id,),
+        )
+        removed = cur.rowcount
+        cur.execute(
+            "UPDATE synthetic_documents SET status = %s WHERE id = %s",
+            (RecordStatus.SME_APPROVED.value, document_id),
+        )
+        conn.commit()
+        return {"removed": removed, "imported_into": imported_into}

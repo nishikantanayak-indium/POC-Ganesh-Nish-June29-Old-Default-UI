@@ -126,7 +126,7 @@ export default function StudioProjectPage() {
         </div>
         {visited.has('review') && (
           <div style={tabStyle('review')}>
-            <ReviewTab projectId={projectId} onToast={addToast} />
+            <ReviewTab projectId={projectId} active={tab === 'review'} onToast={addToast} />
           </div>
         )}
       </main>

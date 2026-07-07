@@ -700,6 +700,19 @@ async def publish_documents(body: PublishDocumentsBody) -> dict:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/documents/{document_id}/recall")
+async def recall_document(document_id: str) -> dict:
+    """Bring a published document back from Document Storage for editing —
+    removes it from the store and reverts it to Approved (editable). Copies
+    already imported into workspaces are left untouched (reported back so the
+    UI can warn)."""
+    ds = get_dataset_service()
+    try:
+        return await asyncio.to_thread(ds.recall_document, document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.get("/projects/{project_id}/lineage")
 async def lineage(project_id: str) -> dict:
     ds = get_dataset_service()

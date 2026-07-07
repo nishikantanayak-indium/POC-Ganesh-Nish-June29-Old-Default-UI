@@ -743,6 +743,31 @@ class SyntheticDatasetManagementService:
 
         return {"published": len(published), "documents": published}
 
+    def recall_document(self, document_id: str) -> dict:
+        """Bring a published document back from the store for further editing.
+
+        Removes it from the shared document store and reverts its status to
+        SME_APPROVED (editable + re-publishable). Copies already imported into
+        Analysis workspaces are independent and are left untouched — the returned
+        ``imported_into`` lets the UI warn about them."""
+        doc = db.get_document(document_id)
+        if doc is None:
+            raise ValueError(f"document {document_id} not found")
+        if doc.status != RecordStatus.PUBLISHED:
+            raise ValueError(f"document {document_id} is not published")
+
+        result = db.recall_document_from_store(document_id)
+        db.add_lineage_edges(doc.project_id, [
+            (f"document:{document_id}", "store:documents", "recalled_from_store"),
+        ])
+        db.touch_project(doc.project_id)
+        return {
+            "document_id": document_id,
+            "status": RecordStatus.SME_APPROVED.value,
+            "removed_from_store": result["removed"],
+            "imported_into": result["imported_into"],
+        }
+
     # ==================================================================
     # Lineage + artifacts
     # ==================================================================
