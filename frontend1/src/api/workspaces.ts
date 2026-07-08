@@ -1,4 +1,4 @@
-import { apiDelete, apiGet, apiPatch, apiPost, uploadSSE } from './client'
+import { apiDelete, apiGet, apiPatch, apiPost, postSSE, uploadSSE } from './client'
 import type { AppStatus, PipelineSummary, SSEEvent, Workspace } from '@/types/analysis'
 
 const base = '/api/workspaces'
@@ -23,9 +23,11 @@ export const resetWorkspace = (workspaceId: string) =>
 export const runPipeline = (workspaceId: string, files: File[], onEvent: (e: SSEEvent) => void, signal?: AbortSignal) =>
   uploadSSE<SSEEvent>(`${base}/${workspaceId}/pipeline/run`, files, 'files', onEvent, signal)
 
-export const importSyntheticDocument = (workspaceId: string, storeDocumentId: string) =>
-  apiPost<{ workspace_id: string; document_id: string; title: string; elements: number }>(
-    `${base}/${workspaceId}/import-synthetic/${storeDocumentId}`,
-  )
+export const importSyntheticDocument = (
+  workspaceId: string,
+  storeDocumentId: string,
+  onEvent: (e: SSEEvent) => void,
+  signal?: AbortSignal,
+) => postSSE<SSEEvent>(`${base}/${workspaceId}/import-synthetic/${storeDocumentId}`, {}, onEvent, signal)
 
 export type { PipelineSummary }

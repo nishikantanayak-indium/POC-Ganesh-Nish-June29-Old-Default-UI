@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import time
+import uuid
+from typing import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from api.deps import evict_workspace, get_graph_service
@@ -57,44 +61,108 @@ async def update_ws(workspace_id: str, body: WorkspaceUpdate) -> dict:
     return ws.to_dict()
 
 
-@router.post("/{workspace_id}/import-synthetic/{store_document_id}")
-async def import_synthetic(workspace_id: str, store_document_id: str) -> dict:
+async def _stream_import_synthetic(workspace_id: str, store_document_id: str) -> AsyncGenerator[str, None]:
     """Pull a published synthetic document from the shared Studio document
     store into this workspace, running it through the real extraction
     pipeline (same path a real file upload takes) and merging it through the
     workspace's shared pipeline coordinator — so concurrent imports/uploads
     into the same workspace still get their cross-document relationships
-    extracted, instead of each racing straight to Neo4j on its own."""
-    import uuid
+    extracted, instead of each racing straight to Neo4j on its own.
 
-    from api.routes.pipeline import _ExtractionResult, _get_write_lock, get_coordinator
+    Streams the exact same event shape as ``pipeline.py::_stream_pipeline``
+    so the frontend drives both through one shared job runner — a synthetic
+    import gets the same step tracker + live log as a manual upload, not a
+    lookalike."""
+    from api.routes.pipeline import _ExtractionResult, _get_write_lock, _sse, get_coordinator
     from services.synthetic_import import prepare_synthetic_import
     from synthetic import db as synthetic_db
 
+    t0 = time.perf_counter()
+    gs = get_graph_service(workspace_id)
+
+    yield _sse({"type": "step_start", "step": "parse", "label": "Preparing Document", "total": 1})
+    await asyncio.sleep(0)
+    t_step = time.perf_counter()
     try:
         parsed, elements, content_hash = await asyncio.to_thread(
             prepare_synthetic_import, workspace_id, store_document_id
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        yield _sse({"type": "error", "step": "parse", "message": str(exc)})
+        return
+    yield _sse({"type": "step_complete", "step": "parse", "count": 1,
+                "elapsed": round(time.perf_counter() - t_step, 2)})
+    await asyncio.sleep(0)
 
-    result = _ExtractionResult(
-        run_id=str(uuid.uuid4()), elements=elements, docs=[parsed],
-        hashes={parsed.id: content_hash},
-    )
-    await get_coordinator(workspace_id).submit_and_wait(result, workspace_id)
+    yield _sse({"type": "step_start", "step": "extract", "label": "Extracting Elements (LLM)", "total": 1})
+    await asyncio.sleep(0)
+    yield _sse({"type": "step_complete", "step": "extract", "count": len(elements),
+                "elapsed": round(time.perf_counter() - t_step, 2)})
+    await asyncio.sleep(0)
 
-    gs = get_graph_service(workspace_id)
-    async with _get_write_lock(workspace_id):
-        await asyncio.to_thread(gs.vector_store.upsert, elements)
+    yield _sse({"type": "step_start", "step": "graph", "label": "Building Knowledge Graph", "total": len(elements)})
+    await asyncio.sleep(0)
+    t_step = time.perf_counter()
+    try:
+        result = _ExtractionResult(
+            run_id=str(uuid.uuid4()), elements=elements, docs=[parsed],
+            hashes={parsed.id: content_hash},
+        )
+        await get_coordinator(workspace_id).submit_and_wait(result, workspace_id)
+    except Exception as exc:
+        yield _sse({"type": "error", "step": "graph", "message": str(exc)})
+        return
+    yield _sse({"type": "step_complete", "step": "graph", "count": result.node_count,
+                "elapsed": round(time.perf_counter() - t_step, 2)})
+    await asyncio.sleep(0)
+
+    yield _sse({"type": "step_start", "step": "vector", "label": "Indexing Semantic Vectors", "total": len(elements)})
+    await asyncio.sleep(0)
+    t_step = time.perf_counter()
+    try:
+        async with _get_write_lock(workspace_id):
+            await asyncio.to_thread(gs.vector_store.upsert, elements)
+    except Exception as exc:
+        yield _sse({"type": "error", "step": "vector", "message": str(exc)})
+        return
+    yield _sse({"type": "step_complete", "step": "vector", "count": len(elements),
+                "elapsed": round(time.perf_counter() - t_step, 2)})
+    await asyncio.sleep(0)
+
+    yield _sse({"type": "step_start", "step": "coverage", "label": "Assessing Coverage", "total": 0})
+    await asyncio.sleep(0)
+    t_step = time.perf_counter()
+    coverage = await asyncio.to_thread(gs.get_coverage_results)
+    yield _sse({"type": "step_complete", "step": "coverage", "count": len(coverage),
+                "elapsed": round(time.perf_counter() - t_step, 2)})
+    await asyncio.sleep(0)
 
     await asyncio.to_thread(synthetic_db.mark_store_document_imported, store_document_id, workspace_id)
 
-    return {
-        "workspace_id": workspace_id, "document_id": parsed.id, "title": parsed.name,
-        "elements": len(elements),
-        "nodes": result.node_count, "edges": result.edge_count,
-    }
+    yield _sse({
+        "type": "pipeline_complete",
+        "workspace_id": workspace_id,
+        "summary": {
+            "documents": 1, "elements": len(elements),
+            "nodes": result.node_count, "edges": result.edge_count,
+            "coverage_items": len(coverage),
+            "elapsed": round(time.perf_counter() - t0, 2),
+        },
+    })
+
+
+@router.post("/{workspace_id}/import-synthetic/{store_document_id}")
+async def import_synthetic(workspace_id: str, store_document_id: str) -> StreamingResponse:
+    from synthetic import db as synthetic_db
+
+    entry = await asyncio.to_thread(synthetic_db.get_store_document, store_document_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"store document {store_document_id} not found")
+
+    return StreamingResponse(
+        _stream_import_synthetic(workspace_id, store_document_id),
+        media_type="text/event-stream",
+    )
 
 
 @router.delete("/{workspace_id}")

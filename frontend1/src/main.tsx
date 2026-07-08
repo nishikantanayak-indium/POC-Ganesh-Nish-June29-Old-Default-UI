@@ -8,7 +8,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/toaster'
 import { GlobalToastBridge } from '@/components/layout/GlobalToastBridge'
 
-const queryClient = new QueryClient({
+export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 15_000,

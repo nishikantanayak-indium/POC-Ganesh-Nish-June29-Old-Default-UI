@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ChevronDown, ChevronUp, File as FileIcon, Play, UploadCloud, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -7,27 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { PipelineProgress } from './PipelineProgress'
 import { runPipeline } from '@/api/workspaces'
-import { usePipelineStore, useWorkspaceJobs } from '@/store/pipelineStore'
-import { useGlobalToastStore } from '@/store/globalToastStore'
+import { useWorkspaceJobs } from '@/store/pipelineStore'
+import { runTrackedPipelineJob } from '@/lib/pipelineJobRunner'
 import { cn } from '@/lib/utils'
 import { formatElapsed } from '@/lib/formatters'
-import type { LogLine, PipelineJob, PipelineStep, SSEEvent, StepId } from '@/types/analysis'
-
-const STEP_DEFS: { id: StepId; label: string }[] = [
-  { id: 'parse', label: 'Parse' },
-  { id: 'extract', label: 'Extract' },
-  { id: 'graph', label: 'Graph' },
-  { id: 'vector', label: 'Vector' },
-  { id: 'coverage', label: 'Coverage' },
-]
-
-function freshSteps(): PipelineStep[] {
-  return STEP_DEFS.map((s) => ({ id: s.id, label: s.label, status: 'pending' as const }))
-}
-
-function nowStamp() {
-  return new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-}
+import type { PipelineJob } from '@/types/analysis'
 
 interface WorkflowPanelProps {
   workspaceId: string
@@ -39,7 +22,6 @@ export function WorkflowPanel({ workspaceId, workspaceName, onPipelineComplete }
   const [files, setFiles] = useState<File[]>([])
   const [dragActive, setDragActive] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
-  const queryClient = useQueryClient()
   const jobs = useWorkspaceJobs(workspaceId)
   const isRunning = jobs.some((j) => j.status === 'running')
 
@@ -51,112 +33,18 @@ export function WorkflowPanel({ workspaceId, workspaceName, onPipelineComplete }
 
   const removeFile = (index: number) => setFiles((prev) => prev.filter((_, i) => i !== index))
 
-  const invalidateWorkspaceQueries = () => {
-    queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId, 'status'] })
-    queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId, 'elements'] })
-    queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId, 'documents'] })
-    queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId, 'graph'], exact: false })
-    queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId, 'coverage'] })
-    queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId, 'cross-doc'] })
-  }
-
   const runJob = async () => {
     if (files.length === 0 || isRunning) return
-
-    const jobId = crypto.randomUUID()
-    const runNumber = usePipelineStore.getState().nextRunNumber(workspaceId)
-    const job: PipelineJob = {
-      id: jobId,
-      runNumber,
-      workspaceId,
-      fileNames: files.map((f) => f.name),
-      steps: freshSteps(),
-      logs: [{ time: nowStamp(), text: `Starting run #${runNumber} with ${files.length} file(s).` }],
-      status: 'running',
-      startedAt: Date.now(),
-    }
-    usePipelineStore.getState().addJob(job)
     const runFiles = files
     setFiles([])
 
-    const patchStep = (stepId: StepId, patch: Partial<PipelineStep>) => {
-      const current = usePipelineStore.getState().jobsByWorkspace[workspaceId]?.find((j) => j.id === jobId)
-      if (!current) return
-      const steps = current.steps.map((s) => (s.id === stepId ? { ...s, ...patch } : s))
-      usePipelineStore.getState().patchJob(workspaceId, jobId, { steps })
-    }
-
-    const appendLog = (line: LogLine) => {
-      const current = usePipelineStore.getState().jobsByWorkspace[workspaceId]?.find((j) => j.id === jobId)
-      if (!current) return
-      usePipelineStore.getState().patchJob(workspaceId, jobId, { logs: [...current.logs, line] })
-    }
-
-    const handleEvent = (event: SSEEvent) => {
-      switch (event.type) {
-        case 'step_start':
-          patchStep(event.step, { status: 'running', message: event.message })
-          appendLog({ time: nowStamp(), text: event.message ?? `${event.step}: started` })
-          break
-        case 'step_progress':
-          patchStep(event.step, { status: 'running', message: event.message, progress: event.progress, count: event.count })
-          if (event.message) appendLog({ time: nowStamp(), text: `${event.step}: ${event.message}` })
-          break
-        case 'step_complete':
-          patchStep(event.step, {
-            status: 'done',
-            message: event.message,
-            count: event.count,
-            elapsed: event.elapsed,
-          })
-          appendLog({ time: nowStamp(), text: event.message ?? `${event.step}: complete` })
-          break
-        case 'pipeline_complete':
-          usePipelineStore.getState().patchJob(workspaceId, jobId, {
-            status: 'done',
-            summary: event.summary,
-            finishedAt: Date.now(),
-          })
-          appendLog({ time: nowStamp(), text: 'Pipeline complete.' })
-          invalidateWorkspaceQueries()
-          onPipelineComplete?.()
-          useGlobalToastStore.getState().push({
-            title: 'Pipeline complete',
-            description: `Run #${runNumber} finished — ${event.summary.elements} elements, ${event.summary.nodes} nodes.`,
-            variant: 'success',
-            workspaceId,
-            workspaceName,
-          })
-          break
-        case 'error':
-          usePipelineStore.getState().patchJob(workspaceId, jobId, { status: 'error', finishedAt: Date.now() })
-          if (event.step) patchStep(event.step, { status: 'error', message: event.message })
-          appendLog({ time: nowStamp(), text: event.message, level: 'error' })
-          useGlobalToastStore.getState().push({
-            title: 'Pipeline failed',
-            description: event.message,
-            variant: 'danger',
-            workspaceId,
-            workspaceName,
-          })
-          break
-      }
-    }
-
-    try {
-      await runPipeline(workspaceId, runFiles, handleEvent)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unexpected error running pipeline.'
-      usePipelineStore.getState().patchJob(workspaceId, jobId, { status: 'error', finishedAt: Date.now() })
-      appendLog({ time: nowStamp(), text: message, level: 'error' })
-      useGlobalToastStore.getState().push({
-        title: 'Pipeline failed',
-        description: message,
-        variant: 'danger',
-        workspaceId,
-        workspaceName,
-      })
-    }
+    await runTrackedPipelineJob({
+      workspaceId,
+      workspaceName,
+      fileNames: runFiles.map((f) => f.name),
+      stream: (onEvent, signal) => runPipeline(workspaceId, runFiles, onEvent, signal),
+      onPipelineComplete,
+    })
   }
 
   return (

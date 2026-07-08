@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { importSyntheticDocument } from '@/api/workspaces'
-import { useGlobalToastStore } from './globalToastStore'
+import { runTrackedPipelineJob } from '@/lib/pipelineJobRunner'
 
 interface ImportJob {
   storeDocumentId: string
@@ -23,31 +23,21 @@ export const useSyntheticImportStore = create<SyntheticImportState>((set, get) =
       jobs: { ...state.jobs, [storeDocumentId]: { storeDocumentId, workspaceId, status: 'importing' } },
     }))
 
-    importSyntheticDocument(workspaceId, storeDocumentId)
-      .then(() => {
-        set((state) => ({
-          jobs: { ...state.jobs, [storeDocumentId]: { storeDocumentId, workspaceId, status: 'done' } },
-        }))
-        useGlobalToastStore.getState().push({
-          title: 'Document imported',
-          description: `"${title}" was added and processed into the workspace.`,
-          variant: 'success',
-          workspaceId,
-          workspaceName,
-        })
-      })
-      .catch((err) => {
-        set((state) => ({
-          jobs: { ...state.jobs, [storeDocumentId]: { storeDocumentId, workspaceId, status: 'error' } },
-        }))
-        useGlobalToastStore.getState().push({
-          title: 'Import failed',
-          description: err instanceof Error ? err.message : `Could not import "${title}".`,
-          variant: 'danger',
-          workspaceId,
-          workspaceName,
-        })
-      })
+    // Runs through the exact same job-tracking path a manual upload does — it
+    // shows up as a Run History card in the Ingest tab with real step-by-step
+    // progress (Parse/Extract/Graph/Vector/Coverage), not a bespoke modal spinner
+    // with no visible pipeline. See lib/pipelineJobRunner.ts.
+    runTrackedPipelineJob({
+      workspaceId,
+      workspaceName,
+      fileNames: [title],
+      startMessage: `Importing "${title}" from Synthetic Library…`,
+      stream: (onEvent, signal) => importSyntheticDocument(workspaceId, storeDocumentId, onEvent, signal),
+    }).then((status) => {
+      set((state) => ({
+        jobs: { ...state.jobs, [storeDocumentId]: { storeDocumentId, workspaceId, status } },
+      }))
+    })
   },
 }))
 

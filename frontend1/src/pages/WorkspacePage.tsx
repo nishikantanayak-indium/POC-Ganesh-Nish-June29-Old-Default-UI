@@ -29,6 +29,7 @@ import { TraceabilityView } from '@/components/workspace/TraceabilityView'
 import { ChatWindow } from '@/components/workspace/ChatWindow'
 import { elementStyle } from '@/lib/domain-taxonomy'
 import { cn } from '@/lib/utils'
+import { useWorkspaceJobs } from '@/store/pipelineStore'
 import type { ElementType } from '@/types/analysis'
 
 const TAB_IDS = ['ingest', 'elements', 'graph', 'traceability'] as const
@@ -202,6 +203,8 @@ export function WorkspacePage() {
 
   const activeTab: TabId = TAB_IDS.includes(tab as TabId) ? (tab as TabId) : 'ingest'
   const [visitedTabs, setVisitedTabs] = useState<Set<TabId>>(new Set([activeTab]))
+  const jobs = useWorkspaceJobs(workspaceId ?? '')
+  const isIngestRunning = jobs.some((j) => j.status === 'running')
   const [graphRefreshKey, setGraphRefreshKey] = useState(0)
   const [renameOpen, setRenameOpen] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
@@ -308,8 +311,14 @@ export function WorkspacePage() {
       <Tabs value={activeTab} onValueChange={handleTabChange} className="mt-6">
         <TabsList>
           {TAB_IDS.map((id) => (
-            <TabsTrigger key={id} value={id}>
+            <TabsTrigger key={id} value={id} className="gap-1.5">
               {TAB_LABELS[id]}
+              {id === 'ingest' && isIngestRunning && (
+                <span className="relative flex h-2 w-2" aria-label="Pipeline running">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent-400 opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-accent-500" />
+                </span>
+              )}
             </TabsTrigger>
           ))}
         </TabsList>
