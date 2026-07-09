@@ -20,6 +20,14 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
@@ -49,6 +57,7 @@ import {
   getDocOverview,
   getMeta,
   uploadSeeds,
+  validateGeneration,
 } from '@/api/studio'
 import type { DocGenKnobs, DocGenTarget, GenEvent, GenStage } from '@/types/studio'
 
@@ -328,6 +337,13 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
   const [events, setEvents] = useState<TimedEvent[]>([])
   const [logOpen, setLogOpen] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [conflict, setConflict] = useState<{
+    status: 'ui_conflict' | 'system_conflict' | 'domain_conflict' | 'security_conflict'
+    conflict_field: string
+    message: string
+  } | null>(null)
+  const [showConflictModal, setShowConflictModal] = useState(false)
+  const [isCheckingConflict, setIsCheckingConflict] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const logEndRef = useRef<HTMLDivElement | null>(null)
 
@@ -353,35 +369,7 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
     !isGenerating &&
     (mode === 'linked' ? dealCount > 0 : rows.some((r) => r.doc_type.trim() && r.count > 0))
 
-  const runGeneration = async () => {
-    const targets: DocGenTarget[] =
-      mode === 'linked'
-        ? []
-        : rows
-            .filter((r) => r.doc_type.trim() && r.count > 0)
-            .map((r) => ({
-              doc_type: r.doc_type,
-              count: r.count,
-              brief: r.brief.trim() || undefined,
-            }))
-
-    if (mode === 'independent' && targets.length === 0) return
-    if (mode === 'linked' && dealCount <= 0) return
-
-    const knobs: DocGenKnobs = {
-      industries: industries
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
-      languages: languages
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
-      note: note.trim() || undefined,
-      mode,
-      ...(mode === 'linked' ? { deal_count: dealCount } : {}),
-    }
-
+  const runGeneration = async (targets: DocGenTarget[], knobs: DocGenKnobs, validationOverride = false) => {
     const controller = new AbortController()
     abortRef.current = controller
     setIsGenerating(true)
@@ -406,6 +394,7 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
           }
         },
         controller.signal,
+        validationOverride,
       )
     } catch (err) {
       setEvents((prev) => [
@@ -421,6 +410,70 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
     } finally {
       setIsGenerating(false)
       abortRef.current = null
+    }
+  }
+
+  const getPayload = useCallback((): { targets: DocGenTarget[]; knobs: DocGenKnobs } | null => {
+    const targets: DocGenTarget[] =
+      mode === 'linked'
+        ? []
+        : rows
+            .filter((r) => r.doc_type.trim() && r.count > 0)
+            .map((r) => ({
+              doc_type: r.doc_type,
+              count: r.count,
+              brief: r.brief.trim() || undefined,
+            }))
+
+    if (mode === 'independent' && targets.length === 0) return null
+    if (mode === 'linked' && dealCount <= 0) return null
+
+    const knobs: DocGenKnobs = {
+      industries: industries
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      languages: languages
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      note: note.trim() || undefined,
+      mode,
+      ...(mode === 'linked' ? { deal_count: dealCount } : {}),
+    }
+
+    return { targets, knobs }
+  }, [mode, rows, dealCount, industries, languages, note])
+
+  const handleGenerateClick = async () => {
+    const payload = getPayload()
+    if (!payload) return
+
+    const { targets, knobs } = payload
+
+    setIsCheckingConflict(true)
+    try {
+      const res = await validateGeneration(projectId, targets, knobs)
+      if (res.status === 'ok') {
+        runGeneration(targets, knobs)
+      } else {
+        setConflict({
+          status: res.status,
+          conflict_field: res.conflict_field,
+          message: res.message,
+        })
+        setShowConflictModal(true)
+      }
+    } catch (err) {
+      console.error("Conflict pre-check failed:", err)
+      setConflict({
+        status: 'system_conflict',
+        conflict_field: 'compliance',
+        message: 'Safety and compliance checks could not be completed. Generating documents directly might bypass safety or privacy controls. Would you like to proceed anyway?'
+      })
+      setShowConflictModal(true)
+    } finally {
+      setIsCheckingConflict(false)
     }
   }
 
@@ -559,7 +612,7 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
         </div>
 
         <div className="flex justify-end">
-          <Button disabled={!canGenerate} loading={isGenerating} onClick={runGeneration}>
+          <Button disabled={!canGenerate || isCheckingConflict} loading={isGenerating || isCheckingConflict} onClick={handleGenerateClick}>
             Generate
           </Button>
         </div>
@@ -655,6 +708,53 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
           )}
         </AnimatePresence>
       </CardContent>
+
+      <Dialog open={showConflictModal} onOpenChange={setShowConflictModal}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className={cn("h-5 w-5", conflict?.status === 'security_conflict' ? "text-danger-600 dark:text-danger-400" : "text-amber-500")} />
+              {conflict?.status === 'ui_conflict'
+                ? 'Configuration Clash'
+                : conflict?.status === 'domain_conflict'
+                  ? 'Invalid Domain Content'
+                  : conflict?.status === 'security_conflict'
+                    ? 'Security Exception'
+                    : 'Compliance Warning'}
+            </DialogTitle>
+            <DialogDescription className="pt-2 text-ink dark:text-ink-inverted">
+              {conflict?.message}
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogFooter className="mt-4">
+            {conflict?.status === 'ui_conflict' || conflict?.status === 'domain_conflict' || conflict?.status === 'security_conflict' ? (
+              <Button onClick={() => setShowConflictModal(false)}>
+                Go Back & Edit
+              </Button>
+            ) : (
+              <div className="flex w-full justify-end gap-2">
+                <Button variant="outline" onClick={() => setShowConflictModal(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="default"
+                  className="bg-amber-600 hover:bg-amber-700 text-white dark:bg-amber-700 dark:hover:bg-amber-800"
+                  onClick={() => {
+                    setShowConflictModal(false)
+                    const payload = getPayload()
+                    if (payload) {
+                      runGeneration(payload.targets, payload.knobs, true)
+                    }
+                  }}
+                >
+                  Proceed Anyway
+                </Button>
+              </div>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   )
 }

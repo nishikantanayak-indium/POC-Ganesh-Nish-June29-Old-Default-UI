@@ -14,7 +14,8 @@ import asyncio
 import json
 import logging
 import queue as _queue
-from collections import Counter
+from collections import Counter, defaultdict
+from time import monotonic
 from typing import AsyncGenerator, List, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -281,6 +282,7 @@ async def upload_seeds(
         # AI-suggested taxonomy derived from the seed content (advisory).
         suggested = gen.suggest_labels(all_elements, project.label_set) if all_elements else None
 
+
         # Merge with any previously uploaded documents rather than replacing
         # them outright — a later upload of one doc type (e.g. RFP) must not
         # wipe out an earlier upload of a different type (e.g. Contract), so
@@ -397,9 +399,38 @@ async def generate(project_id: str, body: GenerateBody) -> StreamingResponse:
 class DocGenerateBody(BaseModel):
     doc_targets: List[dict]   # [{"doc_type": "RFP", "count": 5, "brief": "..."}]
     knobs: dict = {}
+    validation_override: bool = False  # True = user explicitly acknowledged a soft-warning
 
 
 async def _stream_generate_documents(project_id: str, body: DocGenerateBody) -> AsyncGenerator[str, None]:
+    # --- SERVER-SIDE ENFORCEMENT GATE (Layer 3) ---
+    gen = get_generation_service()
+    try:
+        validation = await asyncio.to_thread(
+            gen.validate_generation_brief, body.doc_targets, body.knobs
+        )
+    except Exception:
+        validation = {"status": "system_conflict"}
+
+    hard_block_statuses = {"security_conflict", "domain_conflict", "ui_conflict"}
+    val_status = validation.get("status", "ok")
+
+    if val_status in hard_block_statuses:
+        yield _sse({
+            "stage": "error",
+            "message": f"Generation blocked: {validation.get('message', 'Validation failed.')}",
+        })
+        return
+
+    if val_status == "system_conflict" and not body.validation_override:
+        yield _sse({
+            "stage": "error",
+            "message": f"Generation blocked: {validation.get('message', 'Compliance check failed.')} "
+                       "Use the UI to acknowledge this warning before proceeding.",
+        })
+        return
+    # --- END GATE ---
+
     ds = get_dataset_service()
     progress_q: _queue.SimpleQueue = _queue.SimpleQueue()
 
@@ -434,6 +465,34 @@ async def generate_documents(project_id: str, body: DocGenerateBody) -> Streamin
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
+
+
+# --- Rate limiter for validation endpoint ---
+# TODO (production): Replace with Redis-backed rate limiter (e.g. redis-py + INCR/EXPIRE)
+# when scaling to multi-worker or multi-container deployments. This in-memory dict
+# is per-process and will not aggregate across gunicorn workers or k8s pods.
+_validation_timestamps: dict[str, list[float]] = defaultdict(list)
+_VALIDATION_RATE_LIMIT = 10   # max calls per window per project
+_VALIDATION_WINDOW = 60.0     # seconds
+
+
+def _check_rate_limit(project_id: str) -> bool:
+    now = monotonic()
+    timestamps = _validation_timestamps[project_id]
+    _validation_timestamps[project_id] = [t for t in timestamps if now - t < _VALIDATION_WINDOW]
+    if len(_validation_timestamps[project_id]) >= _VALIDATION_RATE_LIMIT:
+        return False
+    _validation_timestamps[project_id].append(now)
+    return True
+
+
+@router.post("/projects/{project_id}/validate-generation")
+async def validate_generation(project_id: str, body: DocGenerateBody) -> dict:
+    if not _check_rate_limit(project_id):
+        raise HTTPException(status_code=429, detail="Validation rate limit exceeded. Please wait before retrying.")
+    gen = get_generation_service()
+    res = await asyncio.to_thread(gen.validate_generation_brief, body.doc_targets, body.knobs)
+    return res
 
 
 # ---------------------------------------------------------------------------

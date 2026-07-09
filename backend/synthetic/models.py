@@ -24,6 +24,28 @@ class VersionImmutableError(RuntimeError):
     """Raised when attempting to mutate a version that is promoted to main."""
 
 
+class ValidationStatus(str, Enum):
+    """Result status of the generation pre-check validation."""
+
+    OK = "ok"
+    UI_CONFLICT = "ui_conflict"
+    SYSTEM_CONFLICT = "system_conflict"
+    DOMAIN_CONFLICT = "domain_conflict"
+    SECURITY_CONFLICT = "security_conflict"
+
+
+class ConflictField(str, Enum):
+    """The specific field or category of safety check that was violated."""
+
+    LANGUAGE = "language"
+    DOC_TYPE = "doc_type"
+    INDUSTRY = "industry"
+    TIMELINE = "timeline"
+    COMPLIANCE = "compliance"
+    DOMAIN = "domain"
+    NONE = "none"
+
+
 class TaxonomyLabel(str, Enum):
     """Approved business-taxonomy classification labels."""
 

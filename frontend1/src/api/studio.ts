@@ -81,12 +81,23 @@ export const generateDocuments = (
   knobs: DocGenKnobs,
   onEvent: (e: GenEvent) => void,
   signal?: AbortSignal,
+  validationOverride?: boolean,
 ) =>
   postSSE<GenEvent>(
     `${base}/projects/${projectId}/generate-documents`,
-    { doc_targets: docTargets, knobs },
+    { doc_targets: docTargets, knobs, validation_override: validationOverride ?? false },
     onEvent,
     signal,
+  )
+
+export const validateGeneration = (
+  projectId: string,
+  docTargets: DocGenTarget[],
+  knobs: DocGenKnobs,
+) =>
+  apiPost<{ status: 'ok' | 'ui_conflict' | 'system_conflict' | 'domain_conflict' | 'security_conflict'; conflict_field: string; message: string }>(
+    `${base}/projects/${projectId}/validate-generation`,
+    { doc_targets: docTargets, knobs }
   )
 
 // --- Versions / records / reports ---
