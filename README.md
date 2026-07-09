@@ -38,8 +38,10 @@ All nodes land in **Neo4j**, scoped to the workspace. Typed edges (`COVERS`, `PA
 - Watch a **real-time streaming pipeline** process your documents step by step (SSE)
 - Explore an **interactive force-directed / hierarchical knowledge graph** — drag nodes, zoom, expand neighbourhoods
 - View **cross-document relationships** in a dedicated sidebar panel with relationship type filtering
-- Get a **traceability lineage** — which requirements are covered, partial, or missing, with INTER/INTRA document badges
-- Ask **natural language questions** — answered by graph traversal + semantic search, cited to exact sections
+- Get a **traceability lineage** — which requirements are covered, partial, or missing, with INTER/INTRA document badges, plus a **contradictions** card surfacing any `CONTRADICTS` edges between clauses
+- Ask **natural language questions** — either from a floating chat window or a dedicated, persistent-conversation Chat page — answered by graph traversal + semantic search, cited to exact sections
+- Generate a **draft Offer/Proposal** — an evidence-backed, editable response to an ingested RFP, grounded in that workspace's real coverage data, with inline AI-assisted rewriting and export to Markdown/.docx
+- **Compare deals across workspaces** — a Table view on the workspace grid showing coverage %, gaps, and contradiction counts side by side
 
 ---
 
@@ -88,11 +90,14 @@ Structured metadata lives in **PostgreSQL** (`synthetic_*` tables); raw artifact
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │  React Frontend  (Vite · TypeScript · React Router v7)               │
-│  localhost:5173                                                        │
+│  frontend1/ · localhost:5173                                          │
 │                                                                        │
 │  /                          → Landing (Analysis · Synthetic Studio)   │
-│  /workspaces, /workspace/:id/:tab   → Analysis App                    │
-│                          Ingest · Elements · Graph · Traceability     │
+│  /workspaces                        → Workspace grid (Cards/Table)   │
+│  /workspace/:id/:tab                → Analysis App                    │
+│                          Ingest · Explorer · Graph · Traceability ·   │
+│                          Draft (Offer/Proposal generation)            │
+│  /workspace/:id/chat                → Persistent-conversation Chat    │
 │  /studio, /studio/project/:id/:tab  → Synthetic Data Studio           │
 │                          Generate · Validate · Quality · SME · Datasets│
 └────────────────────────────┬─────────────────────────────────────────┘
@@ -107,7 +112,13 @@ Structured metadata lives in **PostgreSQL** (`synthetic_*` tables); raw artifact
 │  GET  /api/workspaces/{id}/graph/cross-doc-relationships              │
 │  GET  /api/workspaces/{id}/traceability/coverage  Coverage results    │
 │  GET  /api/workspaces/{id}/traceability/chain/:id Traceability chain  │
+│  GET  /api/workspaces/{id}/traceability/contradictions  CONTRADICTS   │
 │  POST /api/workspaces/{id}/chat/ask               Intent-aware Q&A   │
+│  GET/POST /api/workspaces/{id}/chat/conversations Persistent chat     │
+│  POST /api/workspaces/{id}/draft/generate         SSE offer drafting  │
+│  GET/PATCH/DELETE /api/workspaces/{id}/draft/:id  Draft CRUD + export │
+│  GET  /api/portfolio                              Cross-workspace     │
+│                                                    coverage/gaps table │
 │  GET  /api/workspaces/{id}/elements               All elements        │
 │  POST /api/workspaces/{id}/reset                  Wipe workspace      │
 └───┬──────────────┬──────────────┬────────────────────────────────────┘
@@ -115,11 +126,11 @@ Structured metadata lives in **PostgreSQL** (`synthetic_*` tables); raw artifact
 ┌───▼───┐      ┌───▼──────┐  ┌───▼──────────────────────────────────┐
 │Neo4j  │      │ Qdrant   │  │  PostgreSQL                          │
 │:7687  │      │ :6333    │  │  :5432                               │
-│       │      │          │  │  workspaces (id, name, desc,         │
-│ Per-  │      │ Per-     │  │             created_at, updated_at)  │
-│ work- │      │ workspace│  └──────────────────────────────────────┘
-│ space │      │ ws_{id}  │
-│ nodes │      │          │
+│       │      │          │  │  workspaces, chat_conversations,     │
+│ Per-  │      │ Per-     │  │  chat_messages, contract_drafts,     │
+│ work- │      │ workspace│  │  plus synthetic_* tables (see        │
+│ space │      │ ws_{id}  │  │  Synthetic Data Studio below)        │
+│ nodes │      │          │  └──────────────────────────────────────┘
 └───────┘      └──────────┘
 ```
 
@@ -295,7 +306,7 @@ pip install -r backend/requirements.txt
 ### 6 — Install frontend dependencies
 
 ```bash
-cd frontend && npm install && cd ..
+cd frontend1 && npm install && cd ..
 ```
 
 ### 7 — Start both servers
@@ -386,14 +397,16 @@ GraphRAG POC/
 │   │       ├── workspaces.py       ← CRUD /api/workspaces (Postgres-backed)
 │   │       ├── pipeline.py         ← POST pipeline/run — SSE streaming + coordinator pattern
 │   │       ├── graph.py            ← GET graph/data, subgraph, cross-doc-relationships, stats
-│   │       ├── traceability.py     ← GET traceability/coverage + chain/:id
-│   │       ├── chat.py             ← POST chat/ask — intent-aware Q&A
+│   │       ├── traceability.py     ← GET traceability/coverage + chain/:id + contradictions
+│   │       ├── chat.py             ← POST chat/ask (intent-aware Q&A) + persistent conversations CRUD
+│   │       ├── contract_draft.py   ← SSE draft/generate, draft CRUD, section revise, export .md/.docx
+│   │       ├── portfolio.py        ← GET /api/portfolio — cross-workspace coverage/gaps/contradictions
 │   │       ├── status.py           ← GET/POST status, reset, elements
 │   │       └── synthetic.py        ← /api/studio — projects, seeds, generate (SSE), sme, publish
 │   │
 │   ├── config/settings.py          ← All env vars as frozen dataclass
 │   │
-│   ├── db/postgres.py              ← Workspace CRUD (psycopg2, sync, wrapped in to_thread)
+│   ├── db/postgres.py              ← Workspace/chat/contract_draft CRUD (psycopg2, sync, wrapped in to_thread)
 │   │
 │   ├── core/
 │   │   ├── models.py               ← AtomicElement, Relationship, ParsedDocument, CoverageResult
@@ -421,7 +434,10 @@ GraphRAG POC/
 │   ├── services/
 │   │   ├── document_service.py     ← Parse + extract + cross-doc relationship extraction
 │   │   ├── graph_service.py        ← Workspace-scoped facade over Neo4j + Qdrant
-│   │   └── qa_service.py           ← Intent detection → evidence → GPT-4o synthesis
+│   │   ├── qa_service.py           ← Intent detection → evidence → GPT-4o synthesis
+│   │   └── contract_draft_service.py ← Grounding bundle (all requirements, tagged by status)
+│   │                                  + GPT-4o draft generation + citation verification
+│   │                                  against real text (never fabricated evidence)
 │   │
 │   └── synthetic/                  ← Synthetic Data Studio (four core services)
 │       ├── taxonomy.py             ← ElementType×TaxonomyLabel matrix + business rules
@@ -435,35 +451,33 @@ GraphRAG POC/
 │       ├── sme_service.py          ← Stratified sampling + verdicts + feedback
 │       └── dataset_service.py      ← Orchestration · versioning · lineage · promote · publish
 │
-├── frontend/
+├── frontend1/                       ← Active frontend (the legacy `frontend/` dir is unused)
 │   └── src/
-│       ├── main.tsx                ← BrowserRouter wrapper
+│       ├── main.tsx                ← BrowserRouter wrapper, exported queryClient
 │       ├── App.tsx                 ← Route definitions (React Router v7)
-│       ├── types.ts                ← Shared TypeScript interfaces
+│       ├── types/analysis.ts       ← Shared TypeScript interfaces (graph, chat, draft, portfolio…)
 │       ├── index.css               ← Tailwind + dark/light theme CSS custom properties
-│       │                             Border color overrides for Tailwind v3 CSS-var issue
-│       ├── api/client.ts           ← All fetch wrappers + SSE reader; all take workspaceId
-│       ├── store/pipelineStore.ts  ← Zustand: byWorkspace map — workspace-scoped jobs, persists across navigation
-  ├── store/globalToastStore.ts ← Cross-workspace pipeline completion toasts
-│       ├── theme/ThemeContext.tsx  ← Dark/light theme provider
+│       ├── api/                    ← One fetch-wrapper module per resource (client.ts has the
+│       │                             shared apiGet/apiPost/apiPatch/apiDelete/postSSE helpers)
 │       ├── pages/
-│       │   ├── WorkspacesPage.tsx  ← Analysis workspace grid
-│       │   ├── WorkspacePage.tsx   ← /workspace/:id — keep-alive tabs, URL routing
+│       │   ├── LandingPage.tsx     ← / — feature highlights + entry points (Workspaces, Studio)
+│       │   ├── WorkspacesPage.tsx  ← Analysis workspace grid, Cards/Table (portfolio) view toggle
+│       │   ├── WorkspacePage.tsx   ← /workspace/:id/:tab — keep-alive tabs, URL routing
+│       │   ├── ChatPage.tsx        ← /workspace/:id/chat — persistent multi-conversation chat
 │       │   ├── StudioProjectsPage.tsx ← /studio — Studio project grid
 │       │   └── StudioProjectPage.tsx  ← /studio/project/:id — 5 keep-alive tabs
 │       └── components/
 │           ├── studio/             ← GenerateTab · ValidateTab · QualityTab · SMEReviewTab · DatasetsTab
-│           ├── WorkflowPanel.tsx   ← Upload zone + SSE pipeline trigger + run history
-│           ├── KnowledgeGraph.tsx  ← React Flow + d3-force/dagre + cross-doc sidebar
-│           ├── ElementsTable.tsx   ← Filterable/sortable elements table
-│           ├── ElementsView.tsx    ← Split-panel document viewer (left doc nav + right Text/OCR/Tables/Elements modes)
-│           ├── TraceabilityView.tsx← 4-column card layout, INTER/INTRA badges
-│           ├── ChatWindow.tsx      ← Floating chat + evidence source cards
-│           ├── PipelineProgress.tsx← Step stepper UI
-│           ├── UploadZone.tsx      ← Drag-and-drop file zone
-│           ├── KnowledgeMapLogo.tsx← SVG logo component
-│           ├── ThemeToggle.tsx     ← Dark/light mode toggle button
-│           └── Toast.tsx           ← Toast notification system
+│           └── workspace/
+│               ├── WorkflowPanel.tsx   ← Upload zone + SSE pipeline trigger + run history
+│               ├── KnowledgeGraph.tsx  ← React Flow + d3-force/dagre + cross-doc sidebar
+│               ├── ElementsTable.tsx / ElementsView.tsx ← "Explorer" tab: split-panel document viewer
+│               ├── TraceabilityView.tsx← Coverage lineage, INTER/INTRA badges, contradictions card
+│               ├── DraftTab.tsx        ← "Draft" tab: offer/proposal generation, contentEditable
+│               │                         review surface with inline AI-assisted rewriting, export
+│               ├── ChatWindow.tsx      ← Floating single-question chat + evidence source cards
+│               ├── SyntheticLibraryModal.tsx ← Import documents from the Synthetic Studio library
+│               └── PipelineProgress.tsx← Step stepper UI
 │
 ├── Data_Samples/                   ← Sample procurement documents for testing
 ├── docker-compose.yml              ← Neo4j 5.x + Qdrant + PostgreSQL 16 + MinIO
@@ -475,17 +489,18 @@ GraphRAG POC/
 
 ## UI Walkthrough
 
-### Workspace grid (`/`)
+### Workspace grid (`/workspaces`)
 
-The app opens to a card grid of all workspaces (stored in PostgreSQL):
+Two views, toggled with a button in the header:
 
-- **Create workspace** — name + optional description → isolated Neo4j/Qdrant scope
-- **Open workspace** — click a card to enter that workspace
-- **Delete workspace** — removes all Neo4j nodes, Qdrant collection, and Postgres row
+- **Cards** (default) — one card per workspace: name/description, created/updated dates, rename and delete actions in an overflow menu
+- **Table** — a sortable **portfolio comparison** across every workspace with data: coverage %, requirements needing attention, gaps, and contradiction count, backed by `GET /api/portfolio`. Built for a bid/proposal manager juggling several deals at once — click any row to open that workspace.
+
+Create workspace (name + optional description → isolated Neo4j/Qdrant scope) and delete workspace (removes all Neo4j nodes, Qdrant collection, and Postgres row) are available from either view.
 
 ### Workspace app (`/workspace/:id/:tab`)
 
-Four tabs — **Ingest · Elements · Graph · Traceability**. Tabs use CSS keep-alive (absolute positioning, `display: none` when inactive) so switching tabs does not remount components or lose state. URL updates to `/workspace/:id/:tab` — deep links and browser back/forward work correctly.
+Five tabs — **Ingest · Explorer · Graph · Traceability · Draft**. Tabs use CSS keep-alive (absolute positioning, `display: none` when inactive) so switching tabs does not remount components or lose state. URL updates to `/workspace/:id/:tab` — deep links and browser back/forward work correctly.
 
 #### Ingest tab
 
@@ -501,7 +516,7 @@ Click **Run Pipeline**. Five steps stream live via SSE with verbose per-chunk an
 
 The right column shows a **step stepper**, live activity log, and **Run History** (all past pipeline runs per workspace). Pipeline state is workspace-scoped — navigating away and back preserves the run history and status. If a pipeline completes while you are in a different workspace, a **global toast notification** appears with a link to navigate back.
 
-#### Elements tab
+#### Explorer tab
 
 Split-panel document viewer. The **left rail** (~208 px) shows a document selector — filename, type, and page count. The **right area** has a mode bar at the top with **[Text] [OCR] [Tables]** content buttons and an **[Elements · N]** button, plus scrollable page chips (amber dot on chips that have tables or OCR content). The content area is full-width: text and OCR are shown as readable prose; tables are rendered with proper column widths and cell padding. The **Elements** mode shows a filterable, sortable table of all extracted elements with type pills, search by text/ID/source, and row expansion for full metadata.
 
@@ -531,9 +546,23 @@ Controls:
 
 Left panel lists every Requirement with its coverage badge (Covered / Partial / Gap) and a coverage score progress bar. Click a requirement to see its lineage across four columns — **Clauses · Risks · Mitigations · LDs** — with **↔ INTER** (cross-document) and **↕ INTRA** (same-document) badges per element, and a gaps alert if risks lack mitigations or LDs.
 
-#### Chat (floating)
+A separate **Contradictions** card surfaces every `CONTRADICTS` edge in the workspace (same-document or cross-document), showing both clause texts side by side with the evidence line — previously this relationship type was only visible as a colored edge buried in the Graph tab.
 
-Bottom-right floating button. Intent-aware Q&A using Cypher graph traversal + BGE-M3 semantic search. Each answer shows the query strategy used and collapsible source evidence cards.
+#### Draft tab
+
+Generates a complete, evidence-backed **offer/proposal** in response to an ingested RFP — grounded in the workspace's real coverage/traceability data, not fabricated content. An RFP, an offer/proposal, and a signed contract are different deal stages; this feature drafts the middle one (the vendor's negotiable response), not the final agreement.
+
+- **Templates** — "Offer / Proposal" (default; point-by-point response, with a "Response to Requirements" section organized around the RFP's own requirement categories, filtered to exclude administrative sections like Evaluation Criteria or Submission Instructions) or "Services Agreement" (a fixed clause-oriented structure).
+- **Generation** — streamed via SSE (grounding → drafting → citing → persisting), addresses **every** requirement — restating already-covered ones and proposing new language for genuine gaps — so the result is a comprehensive response, not just a gap patch.
+- **Anti-hallucination citations** — every cited evidence quote is verified as an actual verbatim substring of the real requirement/clause text; a citation that fails verification (including after an edit invalidates it) is downgraded rather than trusted.
+- **Review surface** — the whole draft is one continuous, editable document (not per-section edit toggles): edit text directly, or select any span to get an inline "Ask AI" popup that rewrites just that selection.
+- **Export** — Markdown or .docx, per draft. Past drafts are listed and can be deleted.
+
+#### Chat
+
+Two entry points:
+- **Floating chat** — a bottom-right button available from any workspace tab, for one-off intent-aware Q&A using Cypher graph traversal + BGE-M3 semantic search, with collapsible source evidence cards.
+- **Chat page** (`/workspace/:id/chat`) — persistent, multi-conversation chat history per workspace, for longer research sessions you want to come back to.
 
 ---
 
@@ -549,8 +578,8 @@ Bottom-right floating button. Intent-aware Q&A using Cypher graph traversal + BG
 1. Add the value to `ElementType` in `backend/core/models.py`
 2. Update the extraction prompt in `backend/extractors/llm_extractor.py`
 3. Add the ID prefix to `prefix_map` in the same file
-4. Add the node colour to `TYPE_CONFIG` in `frontend/src/components/KnowledgeGraph.tsx`
-5. Add the colour to `TYPE_ACCENT` in `frontend/src/components/TraceabilityView.tsx`
+4. Add the node colour to `TYPE_CONFIG` in `frontend1/src/components/workspace/KnowledgeGraph.tsx`
+5. Add the colour to `TYPE_ACCENT` in `frontend1/src/components/workspace/TraceabilityView.tsx`
 
 ### Adding a new Q&A intent
 

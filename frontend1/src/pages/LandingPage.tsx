@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import {
   ArrowRight,
+  FileEdit,
   FlaskConical,
   GitBranch,
   LayoutGrid,
@@ -28,12 +29,17 @@ const FEATURES = [
   {
     icon: ShieldAlert,
     title: 'Surface risk',
-    description: 'Identify unmitigated risks and missing liquidated-damages clauses before they become a problem in negotiation.',
+    description: 'Identify unmitigated risks, missing liquidated-damages clauses, and contradicting clauses before they become a problem in negotiation.',
   },
   {
     icon: MessageSquareText,
     title: 'Ask in plain English',
     description: 'Query your document set conversationally and get answers grounded in graph evidence, not guesswork.',
+  },
+  {
+    icon: FileEdit,
+    title: 'Draft an offer',
+    description: 'Generate an evidence-backed offer/proposal in response to an RFP — every section traces to a real requirement, clause, or risk.',
   },
 ]
 
@@ -110,7 +116,7 @@ export function LandingPage() {
       </div>
 
       {/* Feature highlights */}
-      <div className="mt-24 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-24 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
         {FEATURES.map((f) => (
           <div key={f.title}>
             <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-md bg-slate-50 text-slate-700 dark:bg-slate-900/40 dark:text-slate-200">
