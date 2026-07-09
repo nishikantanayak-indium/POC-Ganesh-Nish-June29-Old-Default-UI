@@ -139,6 +139,15 @@ async def get_draft(workspace_id: str, draft_id: str) -> dict:
     return draft.to_dict()
 
 
+@router.delete("/draft/{draft_id}")
+async def delete_draft(workspace_id: str, draft_id: str) -> dict:
+    existing = await asyncio.to_thread(db.get_contract_draft, draft_id)
+    if existing is None or existing.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    deleted = await asyncio.to_thread(db.delete_contract_draft, draft_id)
+    return {"deleted": deleted}
+
+
 class UpdateDraftBody(BaseModel):
     status: Optional[str] = None
     sections: Optional[list] = None

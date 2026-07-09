@@ -1,4 +1,4 @@
-import { apiGet, apiPatch, apiPost, postSSE } from './client'
+import { apiDelete, apiGet, apiPatch, apiPost, postSSE } from './client'
 import type { ContractDraft, DraftEvent, DraftTemplate, DraftTemplateInfo } from '@/types/analysis'
 
 const base = '/api/workspaces'
@@ -36,6 +36,9 @@ export const updateDraft = (
   draftId: string,
   patch: { status?: ContractDraft['status']; sections?: ContractDraft['sections'] },
 ) => apiPatch<ContractDraft>(`${base}/${workspaceId}/draft/${draftId}`, patch)
+
+export const deleteDraft = (workspaceId: string, draftId: string) =>
+  apiDelete<{ deleted: boolean }>(`${base}/${workspaceId}/draft/${draftId}`)
 
 export const exportDraftMarkdownUrl = (workspaceId: string, draftId: string) =>
   `${base}/${workspaceId}/draft/${draftId}/export.md`

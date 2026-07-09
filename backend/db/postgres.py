@@ -409,6 +409,15 @@ def create_contract_draft(
         return _row_to_contract_draft(d)
 
 
+def delete_contract_draft(draft_id: str) -> bool:
+    _ensure_init()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM contract_drafts WHERE id = %s", (draft_id,))
+        deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
+
+
 def update_contract_draft(
     draft_id: str,
     status: Optional[str] = None,

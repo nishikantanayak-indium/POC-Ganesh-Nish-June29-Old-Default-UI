@@ -14,6 +14,7 @@ import {
   FileText,
   Loader2,
   Sparkles,
+  Trash2,
   X,
   type LucideIcon,
 } from 'lucide-react'
@@ -21,6 +22,14 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
@@ -28,6 +37,7 @@ import { cn } from '@/lib/utils'
 import { formatDateTime, truncate } from '@/lib/formatters'
 import { validationVerdictStyle } from '@/lib/domain-taxonomy'
 import {
+  deleteDraft,
   exportDraftDocxUrl,
   exportDraftMarkdownUrl,
   generateDraft,
@@ -543,6 +553,7 @@ export function DraftTab({ workspaceId }: DraftTabProps) {
   const [logOpen, setLogOpen] = useState(true)
   const [selectedDraftId, setSelectedDraftId] = useState<string | undefined>(undefined)
   const [activeSectionIndex, setActiveSectionIndex] = useState(0)
+  const [deletingDraft, setDeletingDraft] = useState<ContractDraft | undefined>(undefined)
   const logEndRef = useRef<HTMLDivElement | null>(null)
 
   const draftsQuery = useQuery({
@@ -627,6 +638,24 @@ export function DraftTab({ workspaceId }: DraftTabProps) {
       queryClient.setQueryData(['workspace', workspaceId, 'draft', updated.id], updated)
       queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId, 'drafts'] })
       toast({ title: 'Draft finalized', variant: 'success' })
+    },
+  })
+
+  const deleteDraftMutation = useMutation({
+    mutationFn: (draftId: string) => deleteDraft(workspaceId, draftId),
+    onSuccess: (_res, draftId) => {
+      queryClient.invalidateQueries({ queryKey: ['workspace', workspaceId, 'drafts'] })
+      queryClient.removeQueries({ queryKey: ['workspace', workspaceId, 'draft', draftId] })
+      if (selectedDraftId === draftId) setSelectedDraftId(undefined)
+      toast({ title: 'Draft deleted', variant: 'success' })
+      setDeletingDraft(undefined)
+    },
+    onError: (err) => {
+      toast({
+        title: 'Could not delete draft',
+        description: err instanceof Error ? err.message : 'Please try again.',
+        variant: 'destructive',
+      })
     },
   })
 
@@ -734,26 +763,59 @@ export function DraftTab({ workspaceId }: DraftTabProps) {
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2 pt-0">
             {drafts.map((d) => (
-              <button
-                key={d.id}
-                type="button"
-                onClick={() => setSelectedDraftId(d.id)}
-                className={cn(
-                  'rounded-md border px-3 py-1.5 text-left text-xs transition-colors',
-                  selectedDraftId === d.id
-                    ? 'border-accent-400 bg-accent-50 dark:border-accent-700 dark:bg-accent-900/20'
-                    : 'border-border hover:border-accent-300 dark:border-border-dark',
-                )}
-              >
-                <p className="font-medium text-ink dark:text-ink-inverted">{d.title}</p>
-                <p className="mt-0.5 text-ink-subtle">
-                  {d.status} · {formatDateTime(d.created_at)}
-                </p>
-              </button>
+              <div key={d.id} className="group relative">
+                <button
+                  type="button"
+                  onClick={() => setSelectedDraftId(d.id)}
+                  className={cn(
+                    'rounded-md border px-3 py-1.5 pr-7 text-left text-xs transition-colors',
+                    selectedDraftId === d.id
+                      ? 'border-accent-400 bg-accent-50 dark:border-accent-700 dark:bg-accent-900/20'
+                      : 'border-border hover:border-accent-300 dark:border-border-dark',
+                  )}
+                >
+                  <p className="font-medium text-ink dark:text-ink-inverted">{d.title}</p>
+                  <p className="mt-0.5 text-ink-subtle">
+                    {d.status} · {formatDateTime(d.created_at)}
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  aria-label="Delete draft"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setDeletingDraft(d)
+                  }}
+                  className="absolute right-1.5 top-1.5 rounded p-0.5 text-ink-subtle opacity-0 transition-opacity hover:bg-danger-50 hover:text-danger-600 focus-visible:opacity-100 group-hover:opacity-100 dark:hover:bg-danger-900/20"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
             ))}
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={!!deletingDraft} onOpenChange={(open) => !open && setDeletingDraft(undefined)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete "{deletingDraft?.title}"?</DialogTitle>
+            <DialogDescription>This permanently removes this draft. This cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingDraft(undefined)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              loading={deleteDraftMutation.isPending}
+              onClick={() => deletingDraft && deleteDraftMutation.mutate(deletingDraft.id)}
+            >
+              Delete Draft
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {selectedDraftId && (
         <div className="space-y-4">
