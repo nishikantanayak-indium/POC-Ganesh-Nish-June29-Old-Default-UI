@@ -286,6 +286,12 @@ export interface AskResponse {
 
 export type DraftTemplate = 'rfp_mirror' | 'services_agreement' | 'rfp_response'
 
+export interface DraftTemplateInfo {
+  value: DraftTemplate
+  label: string
+  sections: string[]
+}
+
 export interface DraftCitation {
   requirement_id: string
   aspect: string

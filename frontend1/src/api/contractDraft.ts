@@ -1,7 +1,10 @@
-import { apiGet, apiPatch, postSSE } from './client'
-import type { ContractDraft, DraftEvent, DraftTemplate } from '@/types/analysis'
+import { apiGet, apiPatch, apiPost, postSSE } from './client'
+import type { ContractDraft, DraftEvent, DraftTemplate, DraftTemplateInfo } from '@/types/analysis'
 
 const base = '/api/workspaces'
+
+export const getDraftTemplates = (workspaceId: string) =>
+  apiGet<{ templates: DraftTemplateInfo[] }>(`${base}/${workspaceId}/draft/templates`)
 
 export const generateDraft = (
   workspaceId: string,
@@ -9,6 +12,18 @@ export const generateDraft = (
   onEvent: (e: DraftEvent) => void,
   signal?: AbortSignal,
 ) => postSSE<DraftEvent>(`${base}/${workspaceId}/draft/generate`, { template }, onEvent, signal)
+
+export const reviseSection = (
+  workspaceId: string,
+  draftId: string,
+  sectionIndex: number,
+  selectedText: string,
+  instruction: string,
+) =>
+  apiPost<{ revised_text: string }>(
+    `${base}/${workspaceId}/draft/${draftId}/sections/${sectionIndex}/revise`,
+    { selected_text: selectedText, instruction },
+  )
 
 export const listDrafts = (workspaceId: string) =>
   apiGet<{ drafts: ContractDraft[] }>(`${base}/${workspaceId}/drafts`)

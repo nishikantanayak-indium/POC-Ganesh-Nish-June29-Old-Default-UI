@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
@@ -12,8 +13,8 @@ import {
   Download,
   FileText,
   Loader2,
-  Pencil,
   Sparkles,
+  X,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -22,7 +23,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { cn } from '@/lib/utils'
 import { formatDateTime, truncate } from '@/lib/formatters'
@@ -32,7 +32,9 @@ import {
   exportDraftMarkdownUrl,
   generateDraft,
   getDraft,
+  getDraftTemplates,
   listDrafts,
+  reviseSection,
   updateDraft,
 } from '@/api/contractDraft'
 import type {
@@ -42,17 +44,61 @@ import type {
   DraftSection,
   DraftStage,
   DraftTemplate,
+  DraftTemplateInfo,
 } from '@/types/analysis'
 
 interface DraftTabProps {
   workspaceId: string
 }
 
-const TEMPLATE_OPTIONS: { value: DraftTemplate; label: string; description: string }[] = [
-  { value: 'rfp_mirror', label: 'Mirror the RFP', description: "Follows the ingested RFP's own section structure — default." },
-  { value: 'services_agreement', label: 'Services Agreement', description: 'Scope, compensation, term, confidentiality, liability, governing law.' },
-  { value: 'rfp_response', label: 'RFP Response', description: 'Executive summary, point-by-point response, pricing, risk & mitigation.' },
-]
+// A real structure preview instead of a text-described button — shows the
+// actual section headings the template would produce (for 'rfp_mirror',
+// detected out of the real ingested RFP), like a mini table of contents.
+function TemplateThumbnail({
+  info,
+  selected,
+  onSelect,
+  disabled,
+}: {
+  info: DraftTemplateInfo
+  selected: boolean
+  onSelect: () => void
+  disabled: boolean
+}) {
+  const preview = info.sections.slice(0, 7)
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      disabled={disabled}
+      className={cn(
+        'flex flex-col gap-2 rounded-md border p-3 text-left transition-colors',
+        selected
+          ? 'border-accent-400 bg-accent-50 dark:border-accent-700 dark:bg-accent-900/20'
+          : 'border-border hover:border-accent-300 dark:border-border-dark',
+      )}
+    >
+      <p className="text-sm font-medium text-ink dark:text-ink-inverted">{info.label}</p>
+      <div className="rounded-sm border border-border bg-surface p-2.5 dark:border-border-dark dark:bg-surface-dark">
+        {preview.length > 0 ? (
+          <ul className="space-y-1">
+            {preview.map((h, i) => (
+              <li key={i} className="flex items-center gap-1.5 text-[10px] leading-tight text-ink-muted dark:text-ink-subtle">
+                <span className="h-1 w-1 shrink-0 rounded-full bg-ink-subtle/60" />
+                <span className="truncate">{h}</span>
+              </li>
+            ))}
+            {info.sections.length > preview.length && (
+              <li className="pl-2.5 text-[10px] text-ink-subtle">+{info.sections.length - preview.length} more</li>
+            )}
+          </ul>
+        ) : (
+          <p className="text-[10px] text-ink-subtle">Structure detected from your RFP at generation time.</p>
+        )}
+      </div>
+    </button>
+  )
+}
 
 const STAGE_TRACKER: { id: DraftStage; label: string }[] = [
   { id: 'queued', label: 'Queued' },
@@ -70,6 +116,14 @@ function stageRank(stage: DraftStage | undefined): number {
 
 function nowStamp() {
   return new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+// Unwraps a highlight <mark> back into a plain text node carrying whatever
+// text it currently holds — used both to cancel a pending AI edit (restore
+// the original selection) and, after a successful edit, to drop the wrapper
+// once its fade-out transition finishes.
+function unwrapMark(markEl: HTMLElement) {
+  markEl.replaceWith(document.createTextNode(markEl.textContent ?? ''))
 }
 
 interface TimedEvent {
@@ -136,16 +190,27 @@ const STATUS_LABEL: Record<DraftSection['status'], string> = {
   edited: 'Edited',
 }
 
-// One section of a continuous document — reads as a page in a doc editor
-// (heading + flowing prose), not as a boxed "element" card. Edit/approve
-// controls appear inline next to the heading on hover, and citations live in
-// the sidebar rather than an inline expandable box that breaks the flow.
+interface AiPopup {
+  markEl: HTMLElement
+  top: number
+  left: number
+  text: string
+}
+
+// One section of a continuous, directly-editable document — no separate
+// "click Edit to reveal a textarea" mode. The rendered prose IS the editor
+// (a contentEditable surface seeded once from the markdown, never
+// re-rendered out from under an active edit). Selecting any span of text
+// pops a small "Ask AI" box right next to that selection — Notion/Google-
+// Docs style — and the AI's reply is spliced into that exact spot with a
+// brief highlight-fade transition, not replaced instantly.
 function DocSection({
   section,
   active,
   onSelect,
   onApprove,
   onSaveEdit,
+  onAskAi,
   busy,
 }: {
   section: DraftSection
@@ -153,18 +218,129 @@ function DocSection({
   onSelect: () => void
   onApprove: () => void
   onSaveEdit: (body: string) => void
+  onAskAi: (selectedText: string, instruction: string) => Promise<string>
   busy: boolean
 }) {
-  const [editing, setEditing] = useState(false)
-  const [body, setBody] = useState(section.body)
+  const containerRef = useRef<HTMLElement | null>(null)
+  const editableRef = useRef<HTMLDivElement | null>(null)
+  const lastSyncedBody = useRef(section.body)
+  const [popup, setPopup] = useState<AiPopup | null>(null)
+  const [instruction, setInstruction] = useState('')
+  const [asking, setAsking] = useState(false)
 
-  useEffect(() => setBody(section.body), [section.body])
+  // Rendered once per external body change, not on every keystroke — this is
+  // what lets the contentEditable div stay a live, uncontrolled editing
+  // surface instead of React fighting the DOM on each character typed.
+  const html = useMemo(
+    () => renderToStaticMarkup(<ReactMarkdown remarkPlugins={[remarkGfm]}>{section.body}</ReactMarkdown>),
+    [section.body],
+  )
+
+  useLayoutEffect(() => {
+    const el = editableRef.current
+    if (!el) return
+    // Only push an external update into the live DOM when the user isn't
+    // actively editing it right now — never clobber an in-progress edit.
+    if (document.activeElement !== el && section.body !== lastSyncedBody.current) {
+      el.innerHTML = html
+      lastSyncedBody.current = section.body
+    } else if (!el.innerHTML) {
+      el.innerHTML = html
+      lastSyncedBody.current = section.body
+    }
+  }, [html, section.body])
+
+  const closePopup = (restoreText?: string) => {
+    if (popup) {
+      if (restoreText !== undefined) popup.markEl.textContent = restoreText
+      unwrapMark(popup.markEl)
+    }
+    setPopup(null)
+    setInstruction('')
+  }
+
+  useEffect(() => {
+    if (!active) closePopup()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active])
+
+  const saveIfChanged = () => {
+    const el = editableRef.current
+    if (!el) return
+    const current = el.innerText.replace(/\n{3,}/g, '\n\n').trim()
+    if (current && current !== lastSyncedBody.current.trim()) {
+      lastSyncedBody.current = current
+      onSaveEdit(current)
+    }
+  }
+
+  const handleMouseUp = () => {
+    const sel = window.getSelection()
+    const el = editableRef.current
+    const container = containerRef.current
+    if (!sel || sel.isCollapsed || !el || !container || !el.contains(sel.anchorNode)) {
+      return
+    }
+    const text = sel.toString().trim()
+    if (!text) return
+    const range = sel.getRangeAt(0)
+
+    // Wrap the selection in a persistent highlight BEFORE the popup steals
+    // focus — the browser's native selection highlight fades to a dull gray
+    // the instant the contentEditable loses focus, which is exactly what
+    // happens when the user clicks into the popup's input. This explicit
+    // mark stays vivid regardless of focus, so it's always clear what's
+    // being edited until the AI edit actually lands (or is cancelled).
+    const mark = document.createElement('mark')
+    mark.className = 'rounded bg-accent-200 text-inherit dark:bg-accent-800/60'
+    try {
+      range.surroundContents(mark)
+    } catch {
+      return // selection spans element boundaries in a way that can't be simply wrapped — skip
+    }
+    window.getSelection()?.removeAllRanges()
+
+    const rect = mark.getBoundingClientRect()
+    const containerRect = container.getBoundingClientRect()
+    setInstruction('')
+    setPopup({
+      markEl: mark,
+      top: Math.max(0, rect.top - containerRect.top - 46),
+      left: Math.max(0, Math.min(rect.left - containerRect.left, containerRect.width - 280)),
+      text,
+    })
+  }
+
+  const submitAskAi = async () => {
+    if (!popup || !instruction.trim()) return
+    setAsking(true)
+    try {
+      const revised = await onAskAi(popup.text, instruction.trim())
+      const { markEl } = popup
+      markEl.textContent = revised
+      // Smoothly fade the highlight out right after paint, so the edit
+      // reads as a transition landing in place, not an instant text swap —
+      // only removed now that the update has actually been applied.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          markEl.className = 'rounded bg-transparent transition-colors duration-700'
+          setTimeout(() => unwrapMark(markEl), 750)
+        })
+      })
+      setPopup(null)
+      setInstruction('')
+      saveIfChanged()
+    } finally {
+      setAsking(false)
+    }
+  }
 
   return (
     <section
+      ref={containerRef}
       onClick={onSelect}
       className={cn(
-        'group -mx-4 rounded-md px-4 py-2 transition-colors',
+        'group relative -mx-4 rounded-md px-4 py-2 transition-colors',
         active && 'bg-accent-50/60 dark:bg-accent-900/10',
       )}
     >
@@ -184,18 +360,6 @@ function DocSection({
             type="button"
             onClick={(e) => {
               e.stopPropagation()
-              setEditing(true)
-            }}
-            disabled={busy}
-            className="rounded p-1.5 text-ink-subtle hover:bg-surface-subtle hover:text-ink dark:hover:bg-surface-dark-subtle dark:hover:text-ink-inverted"
-            aria-label="Edit section"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
               onApprove()
             }}
             disabled={busy || section.status === 'approved'}
@@ -207,33 +371,48 @@ function DocSection({
         </div>
       </div>
 
-      {editing ? (
-        <div onClick={(e) => e.stopPropagation()} className="space-y-2">
-          <Textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            className="min-h-[160px] text-[14px] leading-relaxed"
+      <div
+        ref={editableRef}
+        contentEditable
+        suppressContentEditableWarning
+        onClick={(e) => e.stopPropagation()}
+        onMouseUp={handleMouseUp}
+        onBlur={() => {
+          if (!popup) saveIfChanged()
+        }}
+        className={cn(
+          PROSE_CLASSES,
+          '-mx-1 rounded-sm px-1 outline-none focus:bg-surface-subtle/40 dark:focus:bg-surface-dark-subtle/40',
+        )}
+      />
+
+      {popup && (
+        <div
+          className="absolute z-10 flex items-center gap-1.5 rounded-md border border-accent-200 bg-surface p-1.5 shadow-lg dark:border-accent-800 dark:bg-surface-dark"
+          style={{ top: popup.top, left: popup.left }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent-600 dark:text-accent-300" />
+          <input
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                submitAskAi()
+              }
+              if (e.key === 'Escape') closePopup(popup.text)
+            }}
+            placeholder="Tell AI how to revise this…"
+            className="w-56 bg-transparent text-xs text-ink outline-none placeholder:text-ink-subtle dark:text-ink-inverted"
             autoFocus
           />
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => { setBody(section.body); setEditing(false) }}>
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              loading={busy}
-              onClick={() => {
-                onSaveEdit(body)
-                setEditing(false)
-              }}
-            >
-              Save
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <div className={PROSE_CLASSES}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{section.body}</ReactMarkdown>
+          <Button size="sm" loading={asking} disabled={!instruction.trim()} onClick={submitAskAi}>
+            Revise
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => closePopup(popup.text)}>
+            <X className="h-3.5 w-3.5" />
+          </Button>
         </div>
       )}
     </section>
@@ -249,6 +428,7 @@ function DraftDocument({
   onSelectSection,
   onApprove,
   onSaveEdit,
+  onAskAi,
   busy,
 }: {
   draft: ContractDraft
@@ -256,6 +436,7 @@ function DraftDocument({
   onSelectSection: (i: number) => void
   onApprove: (i: number) => void
   onSaveEdit: (i: number, body: string) => void
+  onAskAi: (i: number, selectedText: string, instruction: string) => Promise<string>
   busy: boolean
 }) {
   const activeSection = draft.sections[activeIndex]
@@ -276,6 +457,7 @@ function DraftDocument({
                 onSelect={() => onSelectSection(i)}
                 onApprove={() => onApprove(i)}
                 onSaveEdit={(body) => onSaveEdit(i, body)}
+                onAskAi={(selectedText, instruction) => onAskAi(i, selectedText, instruction)}
                 busy={busy}
               />
             ))}
@@ -367,6 +549,12 @@ export function DraftTab({ workspaceId }: DraftTabProps) {
     queryFn: () => listDrafts(workspaceId),
   })
   const drafts = draftsQuery.data?.drafts ?? []
+
+  const templatesQuery = useQuery({
+    queryKey: ['workspace', workspaceId, 'draft-templates'],
+    queryFn: () => getDraftTemplates(workspaceId),
+  })
+  const templates = templatesQuery.data?.templates ?? []
 
   const draftQuery = useQuery({
     queryKey: ['workspace', workspaceId, 'draft', selectedDraftId],
@@ -463,25 +651,25 @@ export function DraftTab({ workspaceId }: DraftTabProps) {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-3">
-            {TEMPLATE_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => setTemplate(opt.value)}
-                disabled={isGenerating}
-                className={cn(
-                  'rounded-md border p-3 text-left text-sm transition-colors',
-                  template === opt.value
-                    ? 'border-accent-400 bg-accent-50 dark:border-accent-700 dark:bg-accent-900/20'
-                    : 'border-border hover:border-accent-300 dark:border-border-dark',
-                )}
-              >
-                <p className="font-medium text-ink dark:text-ink-inverted">{opt.label}</p>
-                <p className="mt-1 text-xs text-ink-subtle">{opt.description}</p>
-              </button>
-            ))}
-          </div>
+          {templatesQuery.isLoading ? (
+            <div className="grid gap-3 sm:grid-cols-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} className="h-32 w-full" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-3">
+              {templates.map((info: DraftTemplateInfo) => (
+                <TemplateThumbnail
+                  key={info.value}
+                  info={info}
+                  selected={template === info.value}
+                  onSelect={() => setTemplate(info.value)}
+                  disabled={isGenerating}
+                />
+              ))}
+            </div>
+          )}
           <div className="flex justify-end">
             <Button onClick={runGeneration} loading={isGenerating} disabled={isGenerating}>
               <Sparkles className="h-4 w-4" />
@@ -630,6 +818,7 @@ export function DraftTab({ workspaceId }: DraftTabProps) {
                 onSelectSection={setActiveSectionIndex}
                 onApprove={(i) => patchSection(i, { status: 'approved' })}
                 onSaveEdit={(i, body) => patchSection(i, { body, status: 'edited' })}
+                onAskAi={(i, selectedText, instruction) => reviseSection(workspaceId, draft.id, i, selectedText, instruction).then((r) => r.revised_text)}
                 busy={updateSectionMutation.isPending}
               />
             </>

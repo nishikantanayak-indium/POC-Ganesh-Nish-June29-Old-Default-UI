@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from api.deps import get_contract_draft_service, get_graph_service
 from db import postgres as db
+from services.contract_draft_service import _quote_appears_in
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}")
 
@@ -100,6 +101,31 @@ async def list_drafts(workspace_id: str) -> dict:
     return {"drafts": [d.to_dict() for d in drafts]}
 
 
+_TEMPLATE_CHOICES = [
+    ("rfp_mirror", "Mirror the RFP"),
+    ("services_agreement", "Services Agreement"),
+    ("rfp_response", "RFP Response"),
+]
+
+
+@router.get("/draft/templates")
+async def get_draft_templates(workspace_id: str) -> dict:
+    """No-LLM structure preview for the template picker — shows the real
+    section list a template would produce (for 'rfp_mirror', headings
+    detected out of the actually-ingested RFP), not just a text blurb."""
+    svc = get_contract_draft_service()
+    gs = get_graph_service(workspace_id)
+
+    def _build() -> list[dict]:
+        out = []
+        for value, label in _TEMPLATE_CHOICES:
+            sections = svc.preview_template_sections(gs, value)
+            out.append({"value": value, "label": label, "sections": sections})
+        return out
+
+    return {"templates": await asyncio.to_thread(_build)}
+
+
 @router.get("/draft/{draft_id}")
 async def get_draft(workspace_id: str, draft_id: str) -> dict:
     draft = await asyncio.to_thread(db.get_contract_draft, draft_id)
@@ -118,10 +144,48 @@ async def update_draft(workspace_id: str, draft_id: str, body: UpdateDraftBody) 
     existing = await asyncio.to_thread(db.get_contract_draft, draft_id)
     if existing is None or existing.workspace_id != workspace_id:
         raise HTTPException(status_code=404, detail="Draft not found")
+
+    sections = body.sections
+    if sections is not None:
+        # A manual or AI-assisted edit can change the body enough that a
+        # previously-verified citation quote no longer actually appears in
+        # it — re-check now rather than let a stale "strong" citation imply
+        # evidence that no longer exists in the edited text.
+        for s in sections:
+            for c in s.get("citations", []):
+                if c.get("quote") and not _quote_appears_in(c["quote"], s.get("body", "")):
+                    c["quote"], c["verdict"] = "", "weak"
+
     updated = await asyncio.to_thread(
-        db.update_contract_draft, draft_id, status=body.status, sections=body.sections,
+        db.update_contract_draft, draft_id, status=body.status, sections=sections,
     )
     return updated.to_dict()
+
+
+class ReviseSectionBody(BaseModel):
+    selected_text: str
+    instruction: str
+
+
+@router.post("/draft/{draft_id}/sections/{section_index}/revise")
+async def revise_section(workspace_id: str, draft_id: str, section_index: int, body: ReviseSectionBody) -> dict:
+    """AI-assisted revision of a specific selected span within one section —
+    distinct from a full manual rewrite. Returns only the replacement text;
+    the client splices it into the section body at the selection offsets and
+    saves via the regular PATCH, so citation re-verification above applies."""
+    draft = await asyncio.to_thread(db.get_contract_draft, draft_id)
+    if draft is None or draft.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if section_index < 0 or section_index >= len(draft.sections):
+        raise HTTPException(status_code=404, detail="Section not found")
+    if not body.selected_text.strip() or not body.instruction.strip():
+        raise HTTPException(status_code=400, detail="selected_text and instruction are required")
+
+    svc = get_contract_draft_service()
+    revised = await asyncio.to_thread(
+        svc.revise_selection, draft.sections[section_index]["body"], body.selected_text, body.instruction,
+    )
+    return {"revised_text": revised}
 
 
 @router.get("/draft/{draft_id}/export.md")

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Dict, List, Optional, Tuple
 
 from openai import OpenAI
@@ -44,6 +45,20 @@ TEMPLATE_LABELS: Dict[str, str] = {
     "rfp_response": "RFP Response",
     "rfp_mirror": "Contract",
 }
+
+# Heuristic heading-line detector for real, arbitrary uploaded RFPs (not the
+# "## heading" markdown convention synthetic documents use) — mirrors the
+# same style of pattern extractors/llm_extractor.py's _SECTION_RE already
+# uses for real contract text: numbered sections, SECTION/ARTICLE/PART
+# labels, roman numerals, or a short ALL-CAPS line.
+_HEADING_LINE_RE = re.compile(
+    r'^(?:'
+    r'(?:\d+\.){1,3}\d*\s+\S|'
+    r'(?:SECTION|ARTICLE|PART)\s+[\dIVXLC]+|'
+    r'[IVXLC]+\.\s+[A-Z]|'
+    r'[A-Z][A-Z \-]{4,70}$'
+    r')',
+)
 
 
 def _quote_appears_in(quote: str, text: str) -> bool:
@@ -94,6 +109,26 @@ def _draft_tool() -> dict:
                     "sections": {"type": "array", "items": section_schema},
                 },
                 "required": ["title", "sections"],
+            },
+        },
+    }
+
+
+def _revise_tool() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "emit_revision",
+            "description": "Return ONLY the replacement text for the selected portion of a document section.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "revised_text": {
+                        "type": "string",
+                        "description": "The replacement for the selected text only — not the whole section.",
+                    },
+                },
+                "required": ["revised_text"],
             },
         },
     }
@@ -177,6 +212,23 @@ class ContractDraftService:
             },
         }
 
+    def _get_rfp_text(self, gs: GraphService) -> Optional[Tuple[str, str]]:
+        """Returns (rfp_name, full_text) for the ingested RFP, or None if there isn't one."""
+        try:
+            docs = gs.store.get_document_contents(gs.workspace_id)
+        except Exception as exc:
+            logger.warning("Could not load RFP: %s", exc)
+            return None
+        rfp = next((d for d in docs if d.get("type") == "RFP"), None)
+        if rfp is None:
+            return None
+        full_text = "\n\n".join(
+            (pc.get("native_text") or pc.get("ocr_text") or "") for pc in rfp.get("page_contents", [])
+        ).strip()
+        if not full_text:
+            return None
+        return rfp.get("name", "RFP"), full_text
+
     def _structure_block(self, gs: GraphService, template: str) -> Tuple[str, str]:
         """Returns (structure_instruction_block, contract_type_label)."""
         if template in FIXED_TEMPLATES:
@@ -186,25 +238,66 @@ class ContractDraftService:
                 TEMPLATE_LABELS[template],
             )
         # Default ('rfp_mirror'): ground structure in the ingested RFP's own text.
-        try:
-            docs = gs.store.get_document_contents(gs.workspace_id)
-        except Exception as exc:
-            logger.warning("Could not load RFP for structure grounding: %s", exc)
-            docs = []
-        rfp = next((d for d in docs if d.get("type") == "RFP"), None)
-        if rfp is None:
+        rfp_text = self._get_rfp_text(gs)
+        if rfp_text is None:
             return ("", TEMPLATE_LABELS["rfp_mirror"])
-        full_text = "\n\n".join(
-            (pc.get("native_text") or pc.get("ocr_text") or "") for pc in rfp.get("page_contents", [])
-        ).strip()
-        if not full_text:
-            return ("", TEMPLATE_LABELS["rfp_mirror"])
+        rfp_name, full_text = rfp_text
         return (
             f"STRUCTURE TO FOLLOW — mirror this RFP's own section order and level of detail "
-            f"('{rfp.get('name', 'RFP')}'), given in full below. Respond to it as a real contract "
+            f"('{rfp_name}'), given in full below. Respond to it as a real contract "
             f"offer in your own words — do not copy its text verbatim:\n\n{full_text[:MAX_RFP_TEXT_CHARS]}",
             TEMPLATE_LABELS["rfp_mirror"],
         )
+
+    def preview_template_sections(self, gs: GraphService, template: str) -> List[str]:
+        """A lightweight, no-LLM preview of what a template's structure looks like,
+        so the picker can show real structure instead of just a text description."""
+        if template in FIXED_TEMPLATES:
+            return FIXED_TEMPLATES[template]
+        # 'rfp_mirror' — sniff heading-like lines out of the real ingested RFP text.
+        rfp_text = self._get_rfp_text(gs)
+        if rfp_text is None:
+            return []
+        _, full_text = rfp_text
+        headings: List[str] = []
+        for line in full_text.split("\n"):
+            line = line.strip()
+            if not line or len(line) > 90:
+                continue
+            if _HEADING_LINE_RE.match(line):
+                headings.append(line)
+            if len(headings) >= 15:
+                break
+        return headings
+
+    # ------------------------------------------------------------------
+    # AI-assisted inline revision — the user selects a span of text inside a
+    # drafted section and asks for a targeted rewrite, distinct from a full
+    # manual edit. Only the selected span is sent for rewriting, and only the
+    # returned replacement is spliced back in client-side — the model never
+    # sees or touches the rest of the document.
+    # ------------------------------------------------------------------
+
+    def revise_selection(self, section_body: str, selected_text: str, instruction: str) -> str:
+        system = (
+            "You are revising ONE specific portion of a contract section per the user's instruction. "
+            "Return ONLY the replacement text for the selected portion — it must read naturally in "
+            "place of the original, matching the surrounding section's tone, grammar, and formatting. "
+            "Do not return the whole section, only the replacement for the selected text. Do not add "
+            "commentary, quotation marks, or markdown fences around it."
+        )
+        user = (
+            f"FULL SECTION (context only — do not repeat it back):\n{section_body}\n\n"
+            f"SELECTED TEXT TO REPLACE:\n{selected_text}\n\n"
+            f"INSTRUCTION:\n{instruction}"
+        )
+        try:
+            data = self._call(system, user, _revise_tool(), "emit_revision", max_tokens=1000)
+        except Exception as exc:
+            logger.warning("Section revision failed: %s", exc)
+            return selected_text
+        revised = str(data.get("revised_text", "")).strip()
+        return revised or selected_text
 
     # ------------------------------------------------------------------
     # Generation
