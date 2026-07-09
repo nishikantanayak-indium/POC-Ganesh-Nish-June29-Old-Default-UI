@@ -72,10 +72,14 @@ export interface CoverageResult {
   requirement_id: string
   requirement_text: string
   status: CoverageStatus
-  covering_clauses: GraphNode[]
-  risks: GraphNode[]
-  mitigations: GraphNode[]
-  lds: GraphNode[]
+  // Bare element IDs, not enriched nodes — matches GraphBuilder.assess_coverage()
+  // (graph/builder.py) exactly. This is the lightweight per-requirement summary
+  // used for the overview table; for full text, use TraceabilityChain below
+  // (GraphBuilder.get_traceability_chain(), one enriched call per requirement).
+  covering_clauses: string[]
+  risks: string[]
+  mitigations: string[]
+  lds: string[]
   source?: string
 }
 
@@ -85,7 +89,10 @@ export interface ChainElement extends GraphNode {
 }
 
 export interface TraceabilityChain {
-  requirement: CoverageResult
+  // Matches GraphBuilder.get_traceability_chain()'s actual "requirement" shape —
+  // an enriched ChainElement (id/type/text/source/document_id/relationship/
+  // is_inter_document), NOT a CoverageResult (which has no "text"/"type" field).
+  requirement: ChainElement
   full_coverage: ChainElement[]
   partial_coverage: ChainElement[]
   risks: ChainElement[]
