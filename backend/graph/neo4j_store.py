@@ -345,6 +345,27 @@ class Neo4jGraphStore(IGraphStore):
         except Exception as exc:
             raise GraphStoreError(f"Failed to fetch cross-document relationships: {exc}") from exc
 
+    def get_contradictions(self, workspace_id: str) -> list[dict]:
+        """Return every CONTRADICTS edge — same-document or cross-document.
+
+        Unlike get_cross_document_relationships, this deliberately does NOT
+        filter to cross-document pairs: a contradiction between two clauses
+        in the SAME contract is just as real and just as worth surfacing."""
+        query = (
+            "MATCH (a:Element {workspace_id: $wid})-[r:CONTRADICTS]->(b:Element {workspace_id: $wid}) "
+            "RETURN "
+            "  a.id AS src_id, a.type AS src_type, a.text AS src_text, "
+            "  a.source AS src_source, a.document_id AS src_doc, "
+            "  coalesce(r.confidence, 1.0) AS conf, coalesce(r.evidence, '') AS ev, "
+            "  b.id AS tgt_id, b.type AS tgt_type, b.text AS tgt_text, "
+            "  b.source AS tgt_source, b.document_id AS tgt_doc"
+        )
+        try:
+            with self._driver.session(database=self._db) as s:
+                return [dict(r) for r in s.run(query, wid=workspace_id)]
+        except Exception as exc:
+            raise GraphStoreError(f"Failed to fetch contradictions: {exc}") from exc
+
     def get_document_hashes(self, workspace_id: str) -> dict[str, str]:
         try:
             with self._driver.session(database=self._db) as s:

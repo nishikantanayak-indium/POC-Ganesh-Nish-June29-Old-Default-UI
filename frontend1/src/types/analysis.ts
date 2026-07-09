@@ -281,3 +281,94 @@ export interface AskResponse {
   evidence: EvidenceItem[]
   query_type: QueryType
 }
+
+// --- Contract Draft (see CONTRACT_DRAFT_GENERATION_DESIGN.md) ---
+
+export type DraftTemplate = 'rfp_mirror' | 'services_agreement' | 'rfp_response'
+
+export interface DraftCitation {
+  requirement_id: string
+  aspect: string
+  quote: string
+  verdict: 'strong' | 'partial' | 'weak'
+}
+
+export interface DraftSection {
+  heading: string
+  body: string
+  addressed_requirement_ids: string[]
+  citations: DraftCitation[]
+  status: 'pending' | 'approved' | 'edited'
+}
+
+export interface DraftGap {
+  requirement_id: string
+  requirement_text: string
+  reason: string
+}
+
+export interface DraftSummary {
+  requirements_total: number
+  requirements_covered: number
+  requirements_needing_attention: number
+  gaps_count: number
+}
+
+export interface ContractDraft {
+  id: string
+  workspace_id: string
+  title: string
+  template: DraftTemplate
+  status: 'draft' | 'in_review' | 'finalized'
+  sections: DraftSection[]
+  gaps: DraftGap[]
+  summary?: DraftSummary
+  created_at: string
+  updated_at: string
+}
+
+// Mirrors backend/api/routes/contract_draft.py's _sse() event shape exactly —
+// same convention as GenEvent (Studio) / SSEEvent (pipeline).
+export type DraftStage = 'queued' | 'grounding' | 'drafting' | 'citing' | 'persisting' | 'done' | 'error'
+
+export interface DraftEvent {
+  stage: DraftStage
+  message?: string
+  summary?: {
+    draft_id: string
+    title: string
+    sections: number
+    gaps: number
+    elapsed: number
+  }
+}
+
+// --- Contradictions & Portfolio ---
+
+export interface Contradiction {
+  src_id: string
+  src_type: ElementType
+  src_text: string
+  src_source?: string
+  src_doc: string
+  conf: number
+  ev?: string
+  tgt_id: string
+  tgt_type: ElementType
+  tgt_text: string
+  tgt_source?: string
+  tgt_doc: string
+}
+
+export interface PortfolioEntry {
+  workspace_id: string
+  name: string
+  updated_at: string
+  nodes: number
+  edges: number
+  requirements_total: number
+  requirements_covered: number
+  requirements_needing_attention: number
+  gaps_count: number
+  contradictions_count: number
+}

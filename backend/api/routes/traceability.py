@@ -35,6 +35,16 @@ async def get_coverage(workspace_id: str) -> dict:
     }
 
 
+@router.get("/contradictions")
+async def get_contradictions(workspace_id: str) -> dict:
+    gs = get_graph_service(workspace_id)
+    try:
+        rows = await asyncio.to_thread(gs.get_contradictions)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"contradictions": rows}
+
+
 @router.get("/chain/{req_id}")
 async def get_chain(workspace_id: str, req_id: str) -> dict:
     gs = get_graph_service(workspace_id)

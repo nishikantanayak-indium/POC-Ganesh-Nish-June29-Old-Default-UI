@@ -121,6 +121,17 @@ def get_sme_service():
     return _sme_service
 
 
+_contract_draft_service = None
+
+
+def get_contract_draft_service():
+    global _contract_draft_service
+    if _contract_draft_service is None:
+        from services.contract_draft_service import ContractDraftService
+        _contract_draft_service = ContractDraftService()
+    return _contract_draft_service
+
+
 def evict_workspace(workspace_id: str) -> None:
     """Remove cached service instances for a deleted workspace."""
     _graph_services.pop(workspace_id, None)

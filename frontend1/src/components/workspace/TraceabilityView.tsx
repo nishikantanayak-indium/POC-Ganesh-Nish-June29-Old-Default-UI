@@ -5,11 +5,46 @@ import { AlertTriangle, FileText, GitCompareArrows, Inbox } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { truncate } from '@/lib/formatters'
 import { coverageStyle, elementStyle } from '@/lib/domain-taxonomy'
-import { getChain, getCoverage } from '@/api/traceability'
-import type { ChainElement, CoverageResult } from '@/types/analysis'
+import { getChain, getContradictions, getCoverage } from '@/api/traceability'
+import type { ChainElement, Contradiction, CoverageResult } from '@/types/analysis'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+
+// Surfaced explicitly rather than left as an easy-to-miss colored edge in the
+// graph view — a real contradiction between two clauses is exactly the kind
+// of thing a reviewer should be pointed at directly, not have to stumble on.
+function ContradictionsCard({ contradictions }: { contradictions: Contradiction[] }) {
+  if (contradictions.length === 0) return null
+
+  return (
+    <Card className="border-danger-200 bg-danger-50 dark:border-danger-700/40 dark:bg-danger-700/10">
+      <CardContent className="space-y-3 pt-5">
+        <div className="flex items-center gap-2 text-sm font-medium text-danger-700 dark:text-danger-400">
+          <AlertTriangle className="h-4 w-4" />
+          {contradictions.length} contradiction{contradictions.length === 1 ? '' : 's'} detected
+        </div>
+        <div className="space-y-3">
+          {contradictions.map((c, i) => (
+            <div key={i} className="grid gap-2 rounded-md border border-danger-200 bg-surface p-3 text-xs dark:border-danger-700/40 dark:bg-surface-dark sm:grid-cols-2">
+              <div className="space-y-1">
+                <p className="font-medium text-ink-muted dark:text-ink-subtle">{c.src_source ?? c.src_doc}</p>
+                <p className="text-ink dark:text-ink-inverted">{c.src_text}</p>
+              </div>
+              <div className="space-y-1 sm:border-l sm:border-danger-200 sm:pl-3 dark:sm:border-danger-700/40">
+                <p className="font-medium text-ink-muted dark:text-ink-subtle">{c.tgt_source ?? c.tgt_doc}</p>
+                <p className="text-ink dark:text-ink-inverted">{c.tgt_text}</p>
+              </div>
+              {c.ev && (
+                <p className="sm:col-span-2 italic text-ink-subtle">{c.ev}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
 
 interface TraceabilityViewProps {
   workspaceId: string
@@ -114,6 +149,13 @@ export function TraceabilityView({ workspaceId }: TraceabilityViewProps) {
     enabled: !!workspaceId,
   })
 
+  const contradictionsQuery = useQuery({
+    queryKey: ['workspace', workspaceId, 'contradictions'],
+    queryFn: () => getContradictions(workspaceId),
+    enabled: !!workspaceId,
+  })
+  const contradictions = contradictionsQuery.data?.contradictions ?? []
+
   const results = coverageQuery.data?.results ?? []
 
   useEffect(() => {
@@ -162,7 +204,9 @@ export function TraceabilityView({ workspaceId }: TraceabilityViewProps) {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_1fr]">
+    <div className="space-y-4">
+      <ContradictionsCard contradictions={contradictions} />
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_1fr]">
       <div className="space-y-3">
         <Card>
           <CardContent className="p-4">
@@ -248,6 +292,7 @@ export function TraceabilityView({ workspaceId }: TraceabilityViewProps) {
             )}
           </>
         )}
+      </div>
       </div>
     </div>
   )

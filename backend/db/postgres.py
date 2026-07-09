@@ -74,6 +74,34 @@ class ConversationMessage:
         }
 
 
+@dataclass
+class ContractDraft:
+    id: str
+    workspace_id: str
+    title: str
+    template: str
+    status: str
+    sections: list
+    gaps: list
+    summary: Optional[dict]
+    created_at: datetime
+    updated_at: datetime
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "workspace_id": self.workspace_id,
+            "title": self.title,
+            "template": self.template,
+            "status": self.status,
+            "sections": self.sections,
+            "gaps": self.gaps,
+            "summary": self.summary,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+        }
+
+
 _db_ready = False
 
 
@@ -120,6 +148,24 @@ def init_db() -> None:
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_chat_msg_conversation
                 ON chat_messages(conversation_id)
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS contract_drafts (
+                id           TEXT        PRIMARY KEY,
+                workspace_id TEXT        NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                title        TEXT        NOT NULL,
+                template     TEXT        NOT NULL,
+                status       TEXT        NOT NULL DEFAULT 'draft',
+                sections     JSONB       NOT NULL,
+                gaps         JSONB       NOT NULL DEFAULT '[]',
+                summary      JSONB,
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_contract_drafts_workspace
+                ON contract_drafts(workspace_id)
         """)
         conn.commit()
     _db_ready = True
@@ -308,3 +354,84 @@ def count_messages(conversation_id: str) -> int:
             (conversation_id,),
         )
         return cur.fetchone()[0]
+
+
+# ---------------------------------------------------------------------------
+# Contract drafts
+# ---------------------------------------------------------------------------
+
+def _row_to_contract_draft(d: dict) -> ContractDraft:
+    return ContractDraft(
+        id=d["id"], workspace_id=d["workspace_id"], title=d["title"],
+        template=d["template"], status=d["status"],
+        sections=d["sections"], gaps=d["gaps"], summary=d.get("summary"),
+        created_at=d["created_at"], updated_at=d["updated_at"],
+    )
+
+
+def list_contract_drafts(workspace_id: str) -> list[ContractDraft]:
+    _ensure_init()
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT * FROM contract_drafts WHERE workspace_id = %s ORDER BY created_at DESC",
+            (workspace_id,),
+        )
+        return [_row_to_contract_draft(dict(r)) for r in cur.fetchall()]
+
+
+def get_contract_draft(draft_id: str) -> Optional[ContractDraft]:
+    _ensure_init()
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM contract_drafts WHERE id = %s", (draft_id,))
+        row = cur.fetchone()
+        return _row_to_contract_draft(dict(row)) if row else None
+
+
+def create_contract_draft(
+    workspace_id: str, title: str, template: str,
+    sections: list, gaps: list, summary: Optional[dict] = None,
+) -> ContractDraft:
+    _ensure_init()
+    import json as _json
+    draft_id = str(uuid.uuid4())
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "INSERT INTO contract_drafts (id, workspace_id, title, template, sections, gaps, summary) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *",
+            (draft_id, workspace_id, title, template,
+             _json.dumps(sections), _json.dumps(gaps),
+             _json.dumps(summary) if summary is not None else None),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        d = dict(row)
+        d["sections"], d["gaps"], d["summary"] = sections, gaps, summary
+        return _row_to_contract_draft(d)
+
+
+def update_contract_draft(
+    draft_id: str,
+    status: Optional[str] = None,
+    sections: Optional[list] = None,
+) -> Optional[ContractDraft]:
+    _ensure_init()
+    import json as _json
+    fields, params = [], []
+    if status is not None:
+        fields.append("status = %s")
+        params.append(status)
+    if sections is not None:
+        fields.append("sections = %s")
+        params.append(_json.dumps(sections))
+    if not fields:
+        return get_contract_draft(draft_id)
+    fields.append("updated_at = NOW()")
+    params.append(draft_id)
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"UPDATE contract_drafts SET {', '.join(fields)} WHERE id = %s RETURNING *",
+            params,
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return _row_to_contract_draft(dict(row)) if row else None

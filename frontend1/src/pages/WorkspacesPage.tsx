@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { FolderPlus, Layers, MoreVertical, Pencil, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, FolderPlus, LayoutGrid, Layers, MoreVertical, Pencil, Table2, Trash2 } from 'lucide-react'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -16,12 +17,15 @@ import {
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { createWorkspace, deleteWorkspace, listWorkspaces, updateWorkspace } from '@/api/workspaces'
-import { formatDate } from '@/lib/formatters'
-import type { Workspace } from '@/types/analysis'
+import { getPortfolio } from '@/api/portfolio'
+import { cn } from '@/lib/utils'
+import { formatDate, formatDateTime } from '@/lib/formatters'
+import type { PortfolioEntry, Workspace } from '@/types/analysis'
 
 function CreateWorkspaceDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const [name, setName] = useState('')
@@ -259,8 +263,132 @@ function WorkspaceCard({ workspace }: { workspace: Workspace }) {
   )
 }
 
+type SortKey = 'name' | 'coverage' | 'gaps' | 'contradictions' | 'updated_at'
+
+function coveragePct(e: PortfolioEntry): number {
+  return e.requirements_total > 0 ? (e.requirements_covered / e.requirements_total) * 100 : 0
+}
+
+// Denser, sortable view of the same workspace data — for comparing coverage/
+// gaps/contradictions across several deals side by side, which a card grid
+// can't do well. Same navigation as clicking a card.
+function PortfolioTable() {
+  const navigate = useNavigate()
+  const [sortKey, setSortKey] = useState<SortKey>('updated_at')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['portfolio'],
+    queryFn: () => getPortfolio(),
+  })
+  const entries = data?.workspaces ?? []
+
+  const sorted = useMemo(() => {
+    const withKey = entries.map((e) => ({
+      entry: e,
+      value:
+        sortKey === 'name' ? e.name.toLowerCase()
+        : sortKey === 'coverage' ? coveragePct(e)
+        : sortKey === 'gaps' ? e.gaps_count
+        : sortKey === 'contradictions' ? e.contradictions_count
+        : Date.parse(e.updated_at),
+    }))
+    withKey.sort((a, b) => {
+      if (a.value < b.value) return sortDir === 'asc' ? -1 : 1
+      if (a.value > b.value) return sortDir === 'asc' ? 1 : -1
+      return 0
+    })
+    return withKey.map((w) => w.entry)
+  }, [entries, sortKey, sortDir])
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('desc')
+    }
+  }
+
+  const SortHeader = ({ label, sortKeyValue }: { label: string; sortKeyValue: SortKey }) => (
+    <button
+      type="button"
+      onClick={() => toggleSort(sortKeyValue)}
+      className="flex items-center gap-1 font-medium hover:text-ink dark:hover:text-ink-inverted"
+    >
+      {label}
+      {sortKey === sortKeyValue && (sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
+    </button>
+  )
+
+  if (isLoading) {
+    return <Skeleton className="h-64 w-full" />
+  }
+
+  if (entries.length === 0) {
+    return (
+      <Card className="mx-auto max-w-md py-8 text-center">
+        <CardContent className="pt-5">
+          <CardDescription>No workspaces with ingested data yet.</CardDescription>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead><SortHeader label="Name" sortKeyValue="name" /></TableHead>
+            <TableHead><SortHeader label="Coverage" sortKeyValue="coverage" /></TableHead>
+            <TableHead><SortHeader label="Gaps" sortKeyValue="gaps" /></TableHead>
+            <TableHead><SortHeader label="Contradictions" sortKeyValue="contradictions" /></TableHead>
+            <TableHead><SortHeader label="Last Updated" sortKeyValue="updated_at" /></TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {sorted.map((e) => {
+            const pct = Math.round(coveragePct(e))
+            return (
+              <TableRow
+                key={e.workspace_id}
+                className="cursor-pointer"
+                onClick={() => navigate(`/workspace/${e.workspace_id}`)}
+              >
+                <TableCell className="font-medium text-ink dark:text-ink-inverted">{e.name}</TableCell>
+                <TableCell>
+                  <Badge variant={pct >= 75 ? 'success' : pct >= 40 ? 'warning' : 'danger'}>
+                    {pct}% ({e.requirements_covered}/{e.requirements_total})
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  {e.gaps_count > 0 ? (
+                    <Badge variant="warning">{e.gaps_count}</Badge>
+                  ) : (
+                    <span className="text-ink-subtle">0</span>
+                  )}
+                </TableCell>
+                <TableCell>
+                  {e.contradictions_count > 0 ? (
+                    <Badge variant="danger">{e.contradictions_count}</Badge>
+                  ) : (
+                    <span className="text-ink-subtle">0</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-ink-subtle">{formatDateTime(e.updated_at)}</TableCell>
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
+    </Card>
+  )
+}
+
 export function WorkspacesPage() {
   const [createOpen, setCreateOpen] = useState(false)
+  const [view, setView] = useState<'cards' | 'table'>('cards')
   const { data, isLoading } = useQuery({
     queryKey: ['workspaces'],
     queryFn: () => listWorkspaces(),
@@ -274,15 +402,47 @@ export function WorkspacesPage() {
         title="Workspaces"
         description="Analysis workspaces for ingesting and tracing contracts and requirements."
         actions={
-          <Button onClick={() => setCreateOpen(true)}>
-            <FolderPlus className="h-4 w-4" />
-            New Workspace
-          </Button>
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-md border border-border p-0.5 dark:border-border-dark">
+              <button
+                type="button"
+                onClick={() => setView('cards')}
+                aria-label="Card view"
+                className={cn(
+                  'rounded-sm p-1.5 transition-colors',
+                  view === 'cards'
+                    ? 'bg-surface-subtle text-ink dark:bg-surface-dark-subtle dark:text-ink-inverted'
+                    : 'text-ink-subtle hover:text-ink dark:hover:text-ink-inverted',
+                )}
+              >
+                <LayoutGrid className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setView('table')}
+                aria-label="Table view — compare deals"
+                className={cn(
+                  'rounded-sm p-1.5 transition-colors',
+                  view === 'table'
+                    ? 'bg-surface-subtle text-ink dark:bg-surface-dark-subtle dark:text-ink-inverted'
+                    : 'text-ink-subtle hover:text-ink dark:hover:text-ink-inverted',
+                )}
+              >
+                <Table2 className="h-4 w-4" />
+              </button>
+            </div>
+            <Button onClick={() => setCreateOpen(true)}>
+              <FolderPlus className="h-4 w-4" />
+              New Workspace
+            </Button>
+          </div>
         }
       />
 
       <div className="mt-6">
-        {isLoading ? (
+        {view === 'table' ? (
+          <PortfolioTable />
+        ) : isLoading ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {Array.from({ length: 6 }).map((_, i) => (
               <Skeleton key={i} className="h-40 w-full" />

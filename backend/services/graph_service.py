@@ -72,6 +72,9 @@ class GraphService:
     def get_traceability(self, req_id: str) -> dict[str, Any]:
         return self.builder.get_traceability_chain(req_id, self.workspace_id)
 
+    def get_contradictions(self) -> list[dict]:
+        return self.store.get_contradictions(self.workspace_id)
+
     # ------------------------------------------------------------------
     # Element access
     # ------------------------------------------------------------------

@@ -26,13 +26,14 @@ import { SyntheticLibraryModal } from '@/components/workspace/SyntheticLibraryMo
 import { ElementsView } from '@/components/workspace/ElementsView'
 import { KnowledgeGraph } from '@/components/workspace/KnowledgeGraph'
 import { TraceabilityView } from '@/components/workspace/TraceabilityView'
+import { DraftTab } from '@/components/workspace/DraftTab'
 import { ChatWindow } from '@/components/workspace/ChatWindow'
 import { elementStyle } from '@/lib/domain-taxonomy'
 import { cn } from '@/lib/utils'
 import { useWorkspaceJobs } from '@/store/pipelineStore'
 import type { ElementType } from '@/types/analysis'
 
-const TAB_IDS = ['ingest', 'elements', 'graph', 'traceability'] as const
+const TAB_IDS = ['ingest', 'elements', 'graph', 'traceability', 'draft'] as const
 type TabId = (typeof TAB_IDS)[number]
 
 const TAB_LABELS: Record<TabId, string> = {
@@ -40,6 +41,7 @@ const TAB_LABELS: Record<TabId, string> = {
   elements: 'Explorer',
   graph: 'Graph',
   traceability: 'Traceability',
+  draft: 'Draft',
 }
 
 function RenameDialog({
@@ -350,6 +352,10 @@ export function WorkspacePage() {
 
         <TabsContent value="traceability" forceMount className={cn(activeTab === 'traceability' ? 'block' : 'hidden')}>
           {visitedTabs.has('traceability') && <TraceabilityView workspaceId={workspaceId} />}
+        </TabsContent>
+
+        <TabsContent value="draft" forceMount className={cn(activeTab === 'draft' ? 'block' : 'hidden')}>
+          {visitedTabs.has('draft') && <DraftTab workspaceId={workspaceId} />}
         </TabsContent>
       </Tabs>
 
