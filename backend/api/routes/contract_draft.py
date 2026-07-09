@@ -26,7 +26,7 @@ def _sse(data: dict) -> str:
 
 
 class GenerateDraftBody(BaseModel):
-    template: str = "rfp_mirror"  # 'rfp_mirror' | 'services_agreement' | 'rfp_response'
+    template: str = "rfp_response"  # 'rfp_response' | 'services_agreement'
 
 
 async def _stream_generate_draft(workspace_id: str, template: str) -> AsyncGenerator[str, None]:
@@ -101,18 +101,23 @@ async def list_drafts(workspace_id: str) -> dict:
     return {"drafts": [d.to_dict() for d in drafts]}
 
 
+# An RFP and a signed Contract are different deal stages (see
+# services/contract_draft_service.py's module comment) — what this feature
+# actually drafts is the Offer/Proposal in between, so 'rfp_response'
+# (point-by-point response, proposal-shaped) is the default, not a literal
+# mirror of the RFP's own document shape.
 _TEMPLATE_CHOICES = [
-    ("rfp_mirror", "Mirror the RFP"),
+    ("rfp_response", "Offer / Proposal"),
     ("services_agreement", "Services Agreement"),
-    ("rfp_response", "RFP Response"),
 ]
 
 
 @router.get("/draft/templates")
 async def get_draft_templates(workspace_id: str) -> dict:
     """No-LLM structure preview for the template picker — shows the real
-    section list a template would produce (for 'rfp_mirror', headings
-    detected out of the actually-ingested RFP), not just a text blurb."""
+    section list a template would produce, including (for 'rfp_response')
+    the actual RFP requirement categories detected for its 'Response to
+    Requirements' section, not just a text blurb."""
     svc = get_contract_draft_service()
     gs = get_graph_service(workspace_id)
 

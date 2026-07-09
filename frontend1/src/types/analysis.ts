@@ -284,7 +284,7 @@ export interface AskResponse {
 
 // --- Contract Draft (see CONTRACT_DRAFT_GENERATION_DESIGN.md) ---
 
-export type DraftTemplate = 'rfp_mirror' | 'services_agreement' | 'rfp_response'
+export type DraftTemplate = 'services_agreement' | 'rfp_response'
 
 export interface DraftTemplateInfo {
   value: DraftTemplate

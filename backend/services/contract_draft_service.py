@@ -42,8 +42,7 @@ FIXED_TEMPLATES: Dict[str, List[str]] = {
 
 TEMPLATE_LABELS: Dict[str, str] = {
     "services_agreement": "Services Agreement",
-    "rfp_response": "RFP Response",
-    "rfp_mirror": "Contract",
+    "rfp_response": "Offer / Proposal",
 }
 
 # Heuristic heading-line detector for real, arbitrary uploaded RFPs (not the
@@ -58,6 +57,22 @@ _HEADING_LINE_RE = re.compile(
     r'[IVXLC]+\.\s+[A-Z]|'
     r'[A-Z][A-Z \-]{4,70}$'
     r')',
+)
+
+# An RFP and a signed Contract are different stages of a deal — the RFP is the
+# buyer's blueprint of needs, a Contract is the final negotiated agreement. An
+# Offer/Proposal (what this service actually drafts) sits between them: it
+# responds point-by-point to the RFP's requirements, it doesn't adopt the
+# RFP's own document shape (which includes sections like "Evaluation Criteria"
+# and "Submission Instructions" that are instructions TO the vendor, not
+# content a vendor would ever put in their own response). So detected RFP
+# headings are only used to inform how "Response to Requirements" is organized
+# internally, never as the whole offer's structure — and administrative
+# sections are filtered out here rather than treated as response content.
+_ADMINISTRATIVE_HEADING_RE = re.compile(
+    r'(evaluation\s+criteria|submission|instructions?\s+to|cover\s+letter|'
+    r'introduction|background|table\s+of\s+contents|definitions|glossary)',
+    re.IGNORECASE,
 )
 
 
@@ -101,7 +116,7 @@ def _draft_tool() -> dict:
         "type": "function",
         "function": {
             "name": "emit_draft",
-            "description": "Emit one complete, coherent draft response Contract/Offer.",
+            "description": "Emit one complete, coherent draft response Offer/Proposal.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -160,22 +175,25 @@ class ContractDraftService:
 
     def build_grounding_bundle(self, gs: GraphService) -> dict:
         """
-        Collect every Not-Covered/Partial requirement's full traceability chain
-        (real clause/risk/mitigation/LD text, not bare IDs) plus a count of
-        already-covered requirements, so the draft prompt has real material to
-        cite and real gaps to keep visible rather than paper over. One
-        get_traceability call per gap requirement — no batch Neo4j method
-        exists today; acceptable for the typically-small gap count in v1.
+        Collect EVERY requirement's full traceability chain (real clause/risk/
+        mitigation/LD text, not bare IDs) — a real offer/proposal comprehensively
+        restates how every requirement is met, not just the ones currently
+        missing coverage. Requirements that are already fully covered still go
+        into 'requirements' (tagged 'Covered') so the draft can restate the
+        existing clause's substance instead of silently omitting them; 'gaps'
+        remains the subset with no covering clause and/or an unmitigated risk,
+        for the flagged-gaps banner. One get_traceability call per requirement —
+        no batch Neo4j method exists today; fine for typical RFP sizes, but a
+        genuinely large RFP (hundreds of requirements) will need batching/
+        chunked generation rather than one prompt with everything, which this
+        v1 does not yet do.
         """
         coverage = gs.get_coverage_results()
-        addressable: List[dict] = []
+        requirements: List[dict] = []
         gaps: List[dict] = []
         covered_count = 0
 
         for r in coverage:
-            if r.status == CoverageStatus.COVERED:
-                covered_count += 1
-                continue
             chain = gs.get_traceability(r.requirement_id)
             if not chain:
                 continue
@@ -189,7 +207,10 @@ class ContractDraftService:
                 "mitigations": chain.get("mitigations", []),
                 "lds": chain.get("lds", []),
             }
-            addressable.append(entry)
+            requirements.append(entry)
+            if r.status == CoverageStatus.COVERED:
+                covered_count += 1
+                continue
             if not entry["full_coverage"] and not entry["partial_coverage"]:
                 gaps.append({
                     "requirement_id": r.requirement_id, "requirement_text": r.requirement_text,
@@ -202,12 +223,12 @@ class ContractDraftService:
                 })
 
         return {
-            "addressable": addressable,
+            "requirements": requirements,
             "gaps": gaps,
             "summary": {
                 "requirements_total": len(coverage),
                 "requirements_covered": covered_count,
-                "requirements_needing_attention": len(addressable),
+                "requirements_needing_attention": len(coverage) - covered_count,
                 "gaps_count": len(gaps),
             },
         }
@@ -229,32 +250,12 @@ class ContractDraftService:
             return None
         return rfp.get("name", "RFP"), full_text
 
-    def _structure_block(self, gs: GraphService, template: str) -> Tuple[str, str]:
-        """Returns (structure_instruction_block, contract_type_label)."""
-        if template in FIXED_TEMPLATES:
-            headings = "\n".join(f"{i + 1}. {h}" for i, h in enumerate(FIXED_TEMPLATES[template]))
-            return (
-                f"STRUCTURE TO FOLLOW — use exactly this section order:\n{headings}",
-                TEMPLATE_LABELS[template],
-            )
-        # Default ('rfp_mirror'): ground structure in the ingested RFP's own text.
-        rfp_text = self._get_rfp_text(gs)
-        if rfp_text is None:
-            return ("", TEMPLATE_LABELS["rfp_mirror"])
-        rfp_name, full_text = rfp_text
-        return (
-            f"STRUCTURE TO FOLLOW — mirror this RFP's own section order and level of detail "
-            f"('{rfp_name}'), given in full below. Respond to it as a real contract "
-            f"offer in your own words — do not copy its text verbatim:\n\n{full_text[:MAX_RFP_TEXT_CHARS]}",
-            TEMPLATE_LABELS["rfp_mirror"],
-        )
-
-    def preview_template_sections(self, gs: GraphService, template: str) -> List[str]:
-        """A lightweight, no-LLM preview of what a template's structure looks like,
-        so the picker can show real structure instead of just a text description."""
-        if template in FIXED_TEMPLATES:
-            return FIXED_TEMPLATES[template]
-        # 'rfp_mirror' — sniff heading-like lines out of the real ingested RFP text.
+    def _filtered_rfp_requirement_headings(self, gs: GraphService, limit: int = 6) -> List[str]:
+        """Heading-like lines from the ingested RFP, EXCLUDING administrative
+        sections (Evaluation Criteria, Submission Instructions, etc.) — those
+        are instructions to the vendor, never content the vendor's own offer
+        should contain. Used only to inform how 'Response to Requirements' is
+        organized internally, never as the whole offer's structure."""
         rfp_text = self._get_rfp_text(gs)
         if rfp_text is None:
             return []
@@ -262,13 +263,40 @@ class ContractDraftService:
         headings: List[str] = []
         for line in full_text.split("\n"):
             line = line.strip()
-            if not line or len(line) > 90:
+            if not line or len(line) > 90 or _ADMINISTRATIVE_HEADING_RE.search(line):
                 continue
             if _HEADING_LINE_RE.match(line):
                 headings.append(line)
-            if len(headings) >= 15:
+            if len(headings) >= limit:
                 break
         return headings
+
+    def _structure_block(self, gs: GraphService, template: str) -> Tuple[str, str]:
+        """Returns (structure_instruction_block, offer_type_label)."""
+        headings = "\n".join(f"{i + 1}. {h}" for i, h in enumerate(FIXED_TEMPLATES[template]))
+        block = f"STRUCTURE TO FOLLOW — use exactly this section order:\n{headings}"
+        if template == "rfp_response":
+            req_headings = self._filtered_rfp_requirement_headings(gs)
+            if req_headings:
+                block += (
+                    "\n\nFor the 'Response to Requirements' section specifically, organize your "
+                    "point-by-point response using the RFP's own requirement categories where evident "
+                    "below (do NOT pull in the RFP's administrative sections like Evaluation Criteria or "
+                    "Submission Instructions — those are instructions to you, not content for your own "
+                    "offer):\n" + "\n".join(f"- {h}" for h in req_headings)
+                )
+        return block, TEMPLATE_LABELS[template]
+
+    def preview_template_sections(self, gs: GraphService, template: str) -> List[str]:
+        """A lightweight, no-LLM preview of what a template's structure looks like,
+        so the picker can show real structure instead of just a text description."""
+        sections = list(FIXED_TEMPLATES.get(template, []))
+        if template == "rfp_response" and "Response to Requirements" in sections:
+            req_headings = self._filtered_rfp_requirement_headings(gs, limit=4)
+            if req_headings:
+                idx = sections.index("Response to Requirements")
+                sections = sections[:idx + 1] + [f"↳ {h}" for h in req_headings] + sections[idx + 1:]
+        return sections
 
     # ------------------------------------------------------------------
     # AI-assisted inline revision — the user selects a span of text inside a
@@ -280,7 +308,7 @@ class ContractDraftService:
 
     def revise_selection(self, section_body: str, selected_text: str, instruction: str) -> str:
         system = (
-            "You are revising ONE specific portion of a contract section per the user's instruction. "
+            "You are revising ONE specific portion of an offer/proposal section per the user's instruction. "
             "Return ONLY the replacement text for the selected portion — it must read naturally in "
             "place of the original, matching the surrounding section's tone, grammar, and formatting. "
             "Do not return the whole section, only the replacement for the selected text. Do not add "
@@ -309,46 +337,58 @@ class ContractDraftService:
         def _fmt(items: List[dict]) -> str:
             return "; ".join(str(i.get("text", "")) for i in items) or "(none)"
 
-        addressable_text = "\n\n".join(
-            f"Requirement {e['requirement_id']} ({e['status']}): {e['requirement_text']}\n"
-            f"  Covering clause(s): {_fmt(e['full_coverage'] + e['partial_coverage'])}\n"
+        def _status_note(status: str) -> str:
+            return (
+                "ALREADY COVERED by an existing clause — restate/adapt its substance into this offer's own "
+                "language (matching figures/terms, not inventing different ones); do not skip it just "
+                "because coverage already exists"
+                if status == "Covered" else
+                "NEEDS NEW LANGUAGE — propose it now, that is the actual point of drafting a response"
+            )
+
+        requirements_text = "\n\n".join(
+            f"Requirement {e['requirement_id']} — {_status_note(e['status'])}\n"
+            f"  Requirement text: {e['requirement_text']}\n"
+            f"  Existing covering clause(s): {_fmt(e['full_coverage'] + e['partial_coverage'])}\n"
             f"  Risk(s): {_fmt(e['risks'])}\n"
             f"  Mitigation(s): {_fmt(e['mitigations'])}\n"
             f"  LD(s): {_fmt(e['lds'])}"
-            for e in bundle["addressable"]
-        ) or "(no outstanding requirements — coverage is already complete)"
+            for e in bundle["requirements"]
+        ) or "(no requirements found in this workspace's graph)"
 
         gaps_text = "\n".join(
             f"- {g['requirement_text']} — {g['reason']}" for g in bundle["gaps"]
         ) or "(none)"
 
         system = (
-            f"You are a senior contract drafter producing a real response {contract_type} for an actual "
-            "counterparty — not training data. Every claim must be grounded in the real requirement/clause/"
-            "risk/mitigation text provided below; never invent facts, figures, or obligations that aren't "
-            "given.\n\n"
-            "For EVERY requirement listed below that isn't already fully covered:\n"
-            "1. PROPOSE NEW CONTRACT LANGUAGE for it in an appropriate section, citing its requirement_id in "
-            "'addressed_requirement_ids' — this is the actual point of drafting a response: a requirement "
-            "having 'no existing clause' (see FLAGGED GAPS below) means you should draft one now, not skip "
-            "it. Only leave a requirement genuinely unaddressed if there is truly no reasonable basis to "
-            "propose language for it — do not skip requirements just because they were previously uncovered.\n"
+            f"You are drafting a real {contract_type} responding to an RFP for an actual counterparty — not "
+            "training data. A real offer/proposal is COMPREHENSIVE: it addresses every requirement below, "
+            "not just the ones currently missing coverage — restating how an already-covered requirement is "
+            "met is just as much a part of a response as proposing language for a gap. Every claim must be "
+            "grounded in the real requirement/clause/risk/mitigation text provided below; never invent "
+            "facts, figures, or obligations that aren't given.\n\n"
+            "For EVERY requirement listed below:\n"
+            "1. Address it in an appropriate section per the note next to it (restate existing coverage, or "
+            "propose new language for a gap) and cite its requirement_id in 'addressed_requirement_ids'. "
+            "Only leave a requirement genuinely unaddressed if there is truly no reasonable basis to say "
+            "anything about it.\n"
             "2. If it has an associated risk, EXPLICITLY acknowledge that risk in the section body and "
             "state a concrete mitigation approach — do not rely on clause language alone to imply the risk "
             "is handled. This is standard, expected practice; an absent risk discussion reads as a red flag "
             "to a reviewer, not a sign of confidence.\n"
             "3. Reference an LD only if one is explicitly listed for it below — never invent one.\n"
             "4. Never fabricate a resolution with vague, non-committal language just to appear complete — if "
-            "you cannot propose concrete language for something, leave it out of 'addressed_requirement_ids' "
+            "you cannot say anything concrete about a requirement, leave it out of 'addressed_requirement_ids' "
             "entirely so it's flagged for human attention instead of falsely appearing resolved.\n\n"
             "For each section, 'citations' evidence is not optional: a non-empty verbatim quote copied from "
             "THIS SECTION'S OWN 'body' (the text you are writing, not the source material above) is "
             "REQUIRED whenever verdict is 'strong' or 'partial'. Use an empty quote only for verdict='weak'."
         )
         user = (
-            f"{structure_block}\n\nOUTSTANDING REQUIREMENTS TO ADDRESS:\n{addressable_text}\n\n"
-            f"FLAGGED GAPS — these have no existing covering clause today; propose new language for as many "
-            f"as you reasonably can (per instruction 1 above):\n{gaps_text}"
+            f"{structure_block}\n\nALL REQUIREMENTS TO ADDRESS ({len(bundle['requirements'])} total):\n"
+            f"{requirements_text}\n\n"
+            f"FLAGGED GAPS — no existing covering clause and/or an unmitigated risk; propose new language "
+            f"for as many as you reasonably can (per instruction 1 above):\n{gaps_text}"
         )
 
         data = self._call(system, user, _draft_tool(), "emit_draft", max_tokens=6000)

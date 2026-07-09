@@ -52,8 +52,9 @@ interface DraftTabProps {
 }
 
 // A real structure preview instead of a text-described button — shows the
-// actual section headings the template would produce (for 'rfp_mirror',
-// detected out of the real ingested RFP), like a mini table of contents.
+// actual section headings the template would produce (for 'rfp_response',
+// its "Response to Requirements" sub-items are detected out of the real
+// ingested RFP's own requirement categories), like a mini table of contents.
 function TemplateThumbnail({
   info,
   selected,
@@ -536,7 +537,7 @@ export function DraftTab({ workspaceId }: DraftTabProps) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
 
-  const [template, setTemplate] = useState<DraftTemplate>('rfp_mirror')
+  const [template, setTemplate] = useState<DraftTemplate>('rfp_response')
   const [events, setEvents] = useState<TimedEvent[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
   const [logOpen, setLogOpen] = useState(true)
@@ -644,10 +645,11 @@ export function DraftTab({ workspaceId }: DraftTabProps) {
     <div className="mx-auto max-w-6xl space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Draft a Response Contract</CardTitle>
+          <CardTitle>Draft a Response Offer</CardTitle>
           <CardDescription>
-            Generates a complete, evidence-backed draft grounded in this workspace's real coverage and
-            traceability data — every claim cites a real requirement, clause, or risk, never invented.
+            Generates a complete, evidence-backed offer/proposal grounded in this workspace's real coverage
+            and traceability data — every claim cites a real requirement, clause, or risk, never invented.
+            The final signed contract comes later, after negotiation.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
