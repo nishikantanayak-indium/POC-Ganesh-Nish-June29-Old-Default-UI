@@ -124,7 +124,7 @@ export function DocumentViewer({
                   '[&_h2]:mt-4 [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold',
                   '[&_h3]:mt-3 [&_h3]:mb-1.5 [&_h3]:text-sm [&_h3]:font-semibold',
                   '[&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1',
-                  '[&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1',
+                  '[&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-8 [&_ol]:space-y-1',
                   '[&_li]:leading-relaxed',
                   '[&_strong]:font-semibold',
                   '[&_a]:text-accent-600 [&_a]:underline dark:[&_a]:text-accent-400',

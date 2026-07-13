@@ -363,7 +363,7 @@ export function ChatPage() {
                       )}
                     >
                       {m.role === 'assistant' ? (
-                        <div className="[&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_table]:text-sm [&_th]:border [&_th]:border-border [&_th]:bg-surface-subtle [&_th]:px-2 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold dark:[&_th]:border-border-dark dark:[&_th]:bg-surface-dark-muted [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1.5 dark:[&_td]:border-border-dark">
+                        <div className="[&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-8 [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_table]:text-sm [&_th]:border [&_th]:border-border [&_th]:bg-surface-subtle [&_th]:px-2 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold dark:[&_th]:border-border-dark dark:[&_th]:bg-surface-dark-muted [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1.5 dark:[&_td]:border-border-dark">
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
                         </div>
                       ) : (

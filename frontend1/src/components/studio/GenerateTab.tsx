@@ -333,6 +333,9 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
   const [industries, setIndustries] = useState('')
   const [languages, setLanguages] = useState('')
   const [note, setNote] = useState('')
+  const [lengthMode, setLengthMode] = useState<'compact' | 'extended'>('extended')
+  const [geography, setGeography] = useState('')
+  const [compliances, setCompliances] = useState('')
 
   const [events, setEvents] = useState<TimedEvent[]>([])
   const [logOpen, setLogOpen] = useState(true)
@@ -440,10 +443,16 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
       note: note.trim() || undefined,
       mode,
       ...(mode === 'linked' ? { deal_count: dealCount } : {}),
+      length_mode: lengthMode,
+      geography: geography.trim() || undefined,
+      compliances: compliances
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
     }
 
     return { targets, knobs }
-  }, [mode, rows, dealCount, industries, languages, note])
+  }, [mode, rows, dealCount, industries, languages, note, lengthMode, geography, compliances])
 
   const handleGenerateClick = async () => {
     const payload = getPayload()
@@ -598,6 +607,38 @@ function GenerationBuilder({ projectId }: { projectId: string }) {
               value={languages}
               onChange={(e) => setLanguages(e.target.value)}
               placeholder={meta?.languages.slice(0, 3).join(', ') || 'e.g. English, Spanish'}
+            />
+          </div>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="gen-length-mode">Document length</Label>
+            <select
+              id="gen-length-mode"
+              value={lengthMode}
+              onChange={(e) => setLengthMode(e.target.value as 'compact' | 'extended')}
+              className="flex h-9 w-full rounded-md border border-zinc-200 bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-950 dark:border-zinc-800"
+            >
+              <option value="extended" className="dark:bg-zinc-950">Extended (9–15 pages)</option>
+              <option value="compact" className="dark:bg-zinc-950">Compact (3–5 pages)</option>
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="gen-geography">Target geography / Country (optional)</Label>
+            <Input
+              id="gen-geography"
+              value={geography}
+              onChange={(e) => setGeography(e.target.value)}
+              placeholder="e.g. US, EU, Global"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="gen-compliances">Target compliances (comma-separated)</Label>
+            <Input
+              id="gen-compliances"
+              value={compliances}
+              onChange={(e) => setCompliances(e.target.value)}
+              placeholder="e.g. HIPAA, GDPR, SOC2"
             />
           </div>
         </div>

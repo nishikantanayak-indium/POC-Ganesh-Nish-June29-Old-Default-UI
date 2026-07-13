@@ -206,6 +206,110 @@ def _generate_document_tool(with_key_facts: bool = False) -> dict:
     }
 
 
+def _classify_reference_tool() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "emit_classification",
+            "description": "Report the document class.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "class": {"type": "string", "enum": ["template", "seed"]}
+                },
+                "required": ["class"]
+            }
+        }
+    }
+
+
+def _analyze_template_tool() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "emit_template_style",
+            "description": "Analyze reference template and extract layout and style options.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "heading_style": {"type": "string", "description": "e.g., UPPERCASE, Title Case, bold headings"},
+                    "numbering_pattern": {"type": "string", "description": "e.g., 1.1.1, Section A, bullet-based, none"},
+                    "tone": {"type": "string", "description": "e.g., Formal, authoritative, simple business"},
+                    "placeholder_style": {"type": "string", "description": "e.g., [TBD], ___, <insert>"},
+                    "table_styling": {"type": "string", "description": "e.g., plain Markdown tables, compact tables"}
+                },
+                "required": ["heading_style", "numbering_pattern", "tone", "placeholder_style", "table_styling"]
+            }
+        }
+    }
+
+
+def _extract_seed_tool(headings: List[str]) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "emit_seed_content",
+            "description": "Map seed document content into the canonical schema section-by-section.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sections": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "heading": {"type": "string", "enum": headings},
+                                "matched_text": {
+                                    "type": "string",
+                                    "description": "The verbatim content matching this section, or null/empty if silent."
+                                }
+                            },
+                            "required": ["heading"]
+                        }
+                    },
+                    "extra_sections": {
+                        "type": "array",
+                        "description": "Sections in the seed document that did not map to any canonical heading.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "heading": {"type": "string"},
+                                "body": {"type": "string"}
+                            },
+                            "required": ["heading", "body"]
+                        }
+                    },
+                    "definitions": {
+                        "type": "array",
+                        "description": "Glossary/definitions extracted from the seed document to carry forward.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "term": {"type": "string"},
+                                "definition": {"type": "string"}
+                            },
+                            "required": ["term", "definition"]
+                        }
+                    },
+                    "requirement_ids": {
+                        "type": "array",
+                        "description": "Requirement IDs (FR-/TR-/NFR-) and Deliverable/SLA IDs extracted to keep unchanged.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "text": {"type": "string"}
+                            },
+                            "required": ["id", "text"]
+                        }
+                    }
+                },
+                "required": ["sections"]
+            }
+        }
+    }
+
+
 _VALIDATION_DIMENSION_DESCRIPTIONS = {
     "structural_fidelity": (
         "Does the document's section order/shape genuinely mirror the structural template it "
@@ -386,10 +490,102 @@ class SyntheticDataGenerationService:
             )
             tc = resp.choices[0].message.tool_calls
             if not tc:
-                return {}
+                raise ExtractionError(f"LLM did not produce a tool call for '{tool_name}'")
             return json.loads(tc[0].function.arguments)
         except Exception as exc:
             raise ExtractionError(f"Generation call '{tool_name}' failed: {exc}") from exc
+
+    def classify_reference_document(self, text: str) -> str:
+        """
+        Classify if the reference document text is a template (style reference)
+        or a seed (data reference). Returns 'template' or 'seed'.
+        """
+        if not text or not text.strip():
+            return "seed"
+        system = (
+            "You are a document classifier.\n"
+            "Analyze the document text and determine if it is a 'template' or a 'seed':\n"
+            "- 'template': Contains placeholder text/brackets (e.g. '[Insert Client Name]', '<date>', '___'), "
+            "has blank formats, and lacks specific project dates or real pricing details. It is uploaded for style/structure only.\n"
+            "- 'seed': Contains real project content (real corporate names, specific dates like 'October 12, 2026', "
+            "specific project scope details, exact currency values). It contains real data to be extracted.\n"
+            "Return a JSON object with a single key 'class' containing either 'template' or 'seed'."
+        )
+        try:
+            sample = text[:15000]
+            res = self._call(
+                system=system,
+                user=f"Document Text:\n{sample}",
+                tool=_classify_reference_tool(),
+                tool_name="emit_classification",
+                max_tokens=100,
+                temperature=0.0
+            )
+            return res.get("class", "seed")
+        except Exception as exc:
+            logger.warning("Reference document classification failed (%s) — falling back to 'seed'", exc)
+            return "seed"
+
+    def analyze_template(self, text: str) -> dict:
+        """
+        Extract the style parameters from a structural template.
+        """
+        system = (
+            "Analyze the reference template to extract styling conventions, layout rules, "
+            "tone, and placeholder formatting patterns. Do NOT extract any project facts or names. "
+            "Return a JSON object matching the emit_template_style tool format."
+        )
+        try:
+            sample = text[:20000]
+            return self._call(
+                system=system,
+                user=f"Template Text:\n{sample}",
+                tool=_analyze_template_tool(),
+                tool_name="emit_template_style",
+                max_tokens=1000,
+                temperature=0.1
+            )
+        except Exception as exc:
+            logger.warning("Template analysis failed: %s", exc)
+            return {
+                "heading_style": "Title Case",
+                "numbering_pattern": "1.1.1",
+                "tone": "Formal",
+                "placeholder_style": "[TBD]",
+                "table_styling": "plain Markdown tables"
+            }
+
+    def extract_seed_content(self, text: str, doc_type: DocumentType) -> dict:
+        """
+        Extract project content from a seed document, mapping it section by section to the canonical schema.
+        """
+        from .canonical_schemas import get_canonical_schema
+        schema = get_canonical_schema(doc_type)
+        headings = [s["heading"] for s in schema]
+        
+        system = (
+            f"You are a seed document analyzer for a {doc_type.value}.\n"
+            "Map the seed content into the canonical schema section-by-section.\n"
+            "Precedence rules:\n"
+            "- Match the content to the closest matching canonical section heading.\n"
+            "- If the seed document is silent on a section, do not fabricate content; leave it empty or map matched_text as null.\n"
+            "- If a seed has custom clauses/sections not represented in the schema, map them to 'extra_sections'.\n"
+            "- Extract all Definitions/Glossary terms and propagate Requirement/Deliverable IDs exactly.\n"
+            "Return a JSON object conforming to the emit_seed_content tool."
+        )
+        try:
+            sample = text[:100000]
+            return self._call(
+                system=system,
+                user=f"Seed Document Text:\n{sample}",
+                tool=_extract_seed_tool(headings),
+                tool_name="emit_seed_content",
+                max_tokens=4000,
+                temperature=0.0
+            )
+        except Exception as exc:
+            logger.warning("Seed content extraction failed: %s", exc)
+            return {"sections": []}
 
     # ------------------------------------------------------------------
     # Seed classification (for the gap-analysis overview)
@@ -542,9 +738,8 @@ class SyntheticDataGenerationService:
             f"- Target Industries: {industries}\n"
             f"- Target Documents to Generate: {target_summary}\n\n"
             "Rules to Check:\n"
-            "1. UI Conflict: Check if the user's brief asks for a different language, industry, or document type "
-            "than what is selected in the UI settings (e.g., user asks for German but settings are English; user asks "
-            "to draft a Contract but the target is RFP).\n"
+            "1. UI Conflict: Check if the user's brief asks to write the output document text in a different language, or target a different industry or document type than what is selected in the UI settings (e.g., user asks for the output text to be written in German but settings are English; user asks to draft a Contract but the target is RFP). "
+            "Note: referencing a company's country of origin, nationality, or geography (e.g., 'a German automobile company' or 'in Germany') is NOT a language conflict. Only flag it as a conflict if they explicitly ask for the output document text itself to be translated or written in a foreign language.\n"
             "2. System/Compliance Conflict: Check if the user asks to bypass standard security, data privacy, compliance, "
             "or legal frameworks (e.g., 'no data protection', 'ignore HIPAA/laws').\n"
             "3. Timeline/Logic Conflict: Check if the user specifies contradicting terms (e.g., development takes 10 years "
@@ -622,11 +817,12 @@ class SyntheticDataGenerationService:
 
         seed_block = ""
         if seeds:
+            safe_seeds = [sanitize_for_prompt(s[:240]) for s in seeds[:8]]
             seed_block = "\n\nReal reference examples (match their tone/structure, do NOT copy):\n" + \
-                "\n".join(f"- {s[:240]}" for s in seeds[:8])
+                "\n".join(f"- {s}" for s in safe_seeds)
         brief_block = ""
         if brief and brief.strip():
-            brief_block = f"\n\nUSER BRIEF — honour every requirement below in the generated text:\n{brief.strip()}"
+            brief_block = f"\n\nUSER BRIEF — honour every requirement below in the generated text:\n{sanitize_for_prompt(brief.strip())}"
 
         if auto_label:
             label_line = (
@@ -652,7 +848,7 @@ class SyntheticDataGenerationService:
         data = self._call(
             system, f"Generate {target}." + brief_block + seed_block,
             _generate_tool(auto_label, label_set), "emit_records",
-            max_tokens=min(8000, 400 + count * 220), temperature=0.85,
+            max_tokens=min(8000, 1000 + count * 500), temperature=0.85,
         )
         records: List[SyntheticRecord] = []
         for raw in data.get("records", []):
@@ -850,102 +1046,299 @@ class SyntheticDataGenerationService:
         emit_key_facts: bool = False,
         min_sections: int = 4,
         max_sections: int = 9,
+        length_mode: Optional[str] = None,
+        geography: str = "",
+        compliances: Optional[List[str]] = None,
     ) -> tuple[SyntheticDocument, str, List[Dict[str, str]]]:
         """
-        Author one complete, coherent synthetic document directly (no atomic
-        elements as an intermediate step) — the document-level counterpart to
-        ``generate_records`` + ``assemble_document`` combined into a single
-        drafting call.
-
-        ``deal_context``, when given, carries forward concrete facts from an
-        earlier document in the same linked deal — this is what makes the
-        real cross-document extractor (which links purely on semantic text
-        overlap, no shared IDs needed) actually find relationships between
-        independently-imported synthetic documents. ``emit_key_facts`` asks
-        this document to itself emit facts for a downstream document to use.
-
-        ``structure_hint``, when given, grounds the document's structure
-        (section order, headings, level of detail) in a real uploaded
-        document of the same type, instead of inventing structure from
-        nothing every time.
-
-        Returns ``(doc, markdown, key_facts)`` — ``key_facts`` is ``[]``
-        unless ``emit_key_facts`` was requested.
+        Author one complete, coherent synthetic document directly, utilizing canonical schemas,
+        precedence rules, template style guides, or seed content mapping (Option 2 pipeline).
         """
+        # Resolve length_mode fallback if not explicitly provided
+        if not length_mode:
+            length_mode = "extended"  # Default fallback
+            # Look inside brief or notes for hints
+            combined_prompt_text = f"{(brief or '')} {(note or '')}".lower()
+            if any(term in combined_prompt_text for term in ["compact", "short", "page limit", "executive draft", "summary draft", "within 4 pages", "4 pages", "four pages"]):
+                length_mode = "compact"
+
+        from .canonical_schemas import get_canonical_schema
+        schema = get_canonical_schema(doc_type, length_mode)
+
+        # Enforce canonical section counts if default min/max are passed
+        min_sections = len(schema)
+        max_sections = len(schema)
+
         industries = industries or taxonomy.DEFAULT_INDUSTRIES
         languages = languages or taxonomy.DEFAULT_LANGUAGES
+        
+        # 1. Determine Input Mode: Classifier (Template vs. Seed vs. Neither)
+        mode = "neither"
+        style_info = {}
+        seed_data = {}
+        merged_draft_text = ""
+        provenance_sources = {}  # Map heading -> source tag
 
-        seed_block = ""
-        if seeds:
-            seed_block = "\n\nReal reference examples (match their tone/structure, do NOT copy):\n" + \
-                "\n".join(f"- {s[:240]}" for s in seeds[:8])
+        if structure_hint is not None and structure_hint.full_text and structure_hint.full_text.strip():
+            doc_class = self.classify_reference_document(structure_hint.full_text)
+            if doc_class == "template":
+                mode = "template"
+                style_info = self.analyze_template(structure_hint.full_text)
+            else:
+                mode = "seed"
+                seed_data = self.extract_seed_content(structure_hint.full_text, doc_type)
+        elif structure_hint is not None and structure_hint.section_headings:
+            # Long document headings fallback -> treat as seed with silent sections
+            mode = "seed"
+            seed_data = {
+                "sections": [{"heading": h, "matched_text": ""} for h in structure_hint.section_headings],
+                "extra_sections": [],
+                "definitions": [],
+                "requirement_ids": []
+            }
+
+        # 2. Python Merger (Option 2) if in Seed mode
+        if mode == "seed":
+            merged_sections = []
+            extracted_sections_map = {}
+            for s in seed_data.get("sections", []):
+                h = s["heading"]
+                # Normalize heading for a more robust match
+                norm_h = "".join(c for c in h.lower() if c.isalnum())
+                extracted_sections_map[norm_h] = s.get("matched_text") or ""
+            
+            for s in schema:
+                heading = s["heading"]
+                norm_schema_h = "".join(c for c in heading.lower() if c.isalnum())
+                content = extracted_sections_map.get(norm_schema_h, "").strip()
+                if content:
+                    tag = "<!-- SOURCE: SEED -->"
+                    provenance_sources[heading] = tag
+                    merged_sections.append(f"## {heading}\n{tag}\n{content}")
+                else:
+                    tag = "<!-- SOURCE: TEMPLATE-DEFAULT -->"
+                    provenance_sources[heading] = tag
+                    default_content = f"[TBD: Enter description and details for section '{heading}']"
+                    merged_sections.append(f"## {heading}\n{tag}\n{default_content}")
+            
+            # Append extra sections
+            for ext in seed_data.get("extra_sections", []):
+                h = ext["heading"]
+                b = ext["body"]
+                tag = "<!-- SOURCE: SEED-EXTENDED -->"
+                provenance_sources[h] = tag
+                merged_sections.append(f"## {h}\n{tag}\n{b}")
+            
+            merged_draft_text = "\n\n".join(merged_sections)
+
+        # 3. Build prompts under the Precedence Contract
         brief_block = ""
         if brief and brief.strip():
-            brief_block = f"\n\nUSER BRIEF — honour every requirement below in the generated document:\n{sanitize_for_prompt(brief.strip())}"
+            brief_block = f"\n\nUSER BRIEF (Priority 1 — overrides everything else):\n{sanitize_for_prompt(brief.strip())}"
+        
         note_block = ""
         if note and note.strip():
-            note_block = f"\n\nADDITIONAL GUIDANCE — applies to this whole generation run:\n{sanitize_for_prompt(note.strip())}"
-        structure_block = ""
-        if structure_hint is not None and structure_hint.full_text:
-            structure_block = (
-                f"\n\nSTRUCTURAL TEMPLATE — a real {doc_type.value} ('{structure_hint.source_name}') is given "
-                "below in full. Mirror its structure closely: the same section order, the same level of "
-                "detail and drafting style per section. Do NOT reuse any of its actual names, figures, or "
-                "sentences — invent entirely new synthetic content that merely follows the same shape.\n\n"
-                f"{sanitize_for_prompt(structure_hint.full_text)}"
-            )
-        elif structure_hint is not None and structure_hint.section_headings:
-            headings = "\n".join(f"{i+1}. {h}" for i, h in enumerate(structure_hint.section_headings))
-            structure_block = (
-                f"\n\nSTRUCTURAL TEMPLATE — follow this real {doc_type.value}'s section order "
-                f"('{structure_hint.source_name}'), inventing new synthetic content for each:\n{headings}"
-            )
+            note_block = f"\n\nADDITIONAL GUIDANCE:\n{sanitize_for_prompt(note.strip())}"
+
         deal_block = ""
         if deal_context is not None:
             covered = "\n".join(f"- {f}" for f in deal_context.covered_facts) or "(none)"
             held_back = "\n".join(f"- {f}" for f in deal_context.held_back_facts) or "(none)"
             deal_block = (
-                f"\n\nDEAL CONTEXT — this document is part of the same deal as an earlier "
-                f"{deal_context.source_label}. Reuse the SAME specific figures/terms/wording "
-                f"(not paraphrased into vaguer language) for the facts below marked 'must reference'.\n"
-                f"Facts to explicitly reference, restating the concrete figures:\n{covered}\n"
-                f"Facts to deliberately NOT reference or address (realistic coverage gap — do not mention these):\n{held_back}"
+                f"\n\nDEAL CONTEXT (Priority 2):\n"
+                f"Facts to explicitly reference and restate verbatim:\n{covered}\n"
+                f"Facts to deliberately OMIT and not mention:\n{held_back}"
             )
+
+        # Select target schema outlines for System Prompt
+        schema_outline_lines = []
+        for i, s in enumerate(schema, 1):
+            schema_outline_lines.append(f"{i}. {s['heading']} (Format: {s['format_type']})")
+        schema_block = "\n".join(schema_outline_lines)
+
+        # Hygiene & formatting instructions based on doc_type
+        # Compile geography and compliance prompt guidelines
+        geo_text = geography.strip() if geography else "Global / Neutral (do not assume US or any specific country unless specified)"
+        comp_list = compliances if compliances else []
+        if comp_list:
+            comp_text = ", ".join(comp_list)
+        else:
+            comp_text = "geography-neutral regulatory frameworks (e.g. applicable local data protection, security, and privacy laws, such as GDPR, HIPAA, or DPDP Act depending on relevance)"
+        
+        compliance_guidelines = (
+            f"- Target Geography / Jurisdiction: {geo_text}\n"
+            f"- Target Regulatory Compliance Frameworks: {comp_text}\n"
+            "  Strictly write all compliance and legal rules in alignment with this geography and list of frameworks.\n"
+            "  Do NOT assume or mention HIPAA directly unless the geography is US-specific or HIPAA is explicitly listed as a target compliance framework.\n"
+            "- Placeholder / Anonymity Rule: You MUST NOT invent specific details (such as company/client names, contact names, email addresses, phone numbers, or exact dates/deadlines) unless they are explicitly provided in the user inputs. "
+            "If any specific fact is not provided, represent it using placeholders like [Client Name], [Vendor Name], [Issue Date], [Submission Deadline], [Point of Contact], [Jurisdiction], or [Applicable Healthcare Privacy Regulation]."
+        )
+
+        hygiene_instructions = ""
+        if doc_type == DocumentType.RFP:
+            hygiene_instructions = (
+                "- Document Type Rule (Priority 3): This is an RFP (Request for Proposal). It is a pre-award bid solicitation document.\n"
+                "  Do NOT refer to this document as 'the Agreement', 'this Contract', or 'this Covenant'. Use 'this RFP' or 'Solicitation'.\n"
+                "  Do NOT include signature/execution blocks or signature lines.\n"
+                "- Requirement IDs: You must assign stable IDs to requirements (FR-XXX, TR-XXX, NFR-XXX) starting at 001. Assign to every row in requirements tables.\n"
+                "- Evaluation weights: Technical=30%, Experience=20%, Implementation=20%, Commercial=20%, Compliance/Risk=10%. Adjust compliance weight up to 20-25% if the brief implies a highly-regulated domain.\n"
+                f"{compliance_guidelines}"
+            )
+        elif doc_type == DocumentType.CONTRACT:
+            summary_ref = "Contract Summary" if length_mode == "extended" else "Parties to the Agreement"
+            sig_ref = "Signatures"
+            hygiene_instructions = (
+                "- Document Type Rule (Priority 3): This is a Contract / Agreement. It is a legally binding execution document.\n"
+                "  Do NOT refer to this document as 'the RFP' or 'the Solicitation'. Use 'this Agreement' or 'this Contract'.\n"
+                f"  Must include a legal disclaimer in the '{summary_ref}' section (or Recitals) and the '{sig_ref}' section: 'This draft is generated for business review purposes and should be reviewed by qualified legal counsel before execution.'\n"
+                f"  Must include signature lines in the '{sig_ref}' section.\n"
+                "  Must include an Order of Precedence clause (in Section 7 for extended mode, or the governing clauses/definitions for compact mode) outlining priority: Main body > SOW > Schedules > Annexures.\n"
+                "  Must split Background IP (pre-existing) and Foreground IP (work product) in the Intellectual Property Rights section.\n"
+                "  If Contract narrows RFP scope, flag this inline where it occurs with '[VARIANCE FROM RFP §x: detail]'. Do NOT put scope changes in the Open Items section which is a pre-signature punch list.\n"
+                f"{compliance_guidelines}"
+            )
+        elif doc_type == DocumentType.RISK_SHEET:
+            from .canonical_schemas import COMPACT_RISK_COLUMNS, EXTENDED_RISK_COLUMNS
+            cols = COMPACT_RISK_COLUMNS if length_mode == "compact" else EXTENDED_RISK_COLUMNS
+            cols_text = " | ".join(cols)
+            cols_format = " | ".join(["---"] * len(cols))
+            
+            risk_sheet_hygiene = (
+                "- Document Type Rule (Priority 3): This is a Risk Sheet / Register.\n"
+                "  All risk rows in the Risk Register must specify a Likelihood (1-5) and Impact Severity (1-5).\n"
+                "  Risk Score must be calculated mathematically as: Score = Likelihood * Impact Severity.\n"
+                "  Risk Rating must match: 1-4 (Low), 5-9 (Medium), 10-16 (High), 17-25 (Critical).\n"
+                "  Risk Category must only be chosen from: Commercial/Financial, Legal/Compliance, Delivery/Schedule, Technical/Solution, Operational, Security/Data Protection, Vendor/Third-Party, Reputational/Strategic.\n"
+                "  Risk Status must only be chosen from: Open, In Review, Mitigated, Closed, Accepted.\n"
+                f"  The Risk Register table MUST have exactly these columns: {', '.join(cols)}.\n"
+                f"  Example format:\n  | {cols_text} |\n  | {cols_format} |\n  | R-001 | ... |"
+            )
+            if length_mode == "extended":
+                risk_sheet_hygiene += "\n  Source Document Reference: Each row must refer to source: 'RFP §x, ID' or 'Contract Cl. y'."
+            hygiene_instructions = f"{risk_sheet_hygiene}\n{compliance_guidelines}"
+
+        # Style guidelines block
+        style_block = ""
+        if mode == "template":
+            style_block = (
+                f"\n\nSTYLE INSTRUCTIONS (extracted from structural template):\n"
+                f"- Heading style: {style_info.get('heading_style')}\n"
+                f"- Numbering pattern: {style_info.get('numbering_pattern')}\n"
+                f"- Tone and Formality: {style_info.get('tone')}\n"
+                f"- Table styling: {style_info.get('table_styling')}\n"
+                f"- Placeholder style: {style_info.get('placeholder_style') or '[TBD]'}\n"
+            )
+        elif mode == "seed":
+            style_block = (
+                "\n\nSTYLE INSTRUCTIONS: Use the same formal, legal, and professional style from the seed document."
+            )
+
+        length_guideline = (
+            "This is a COMPACT draft (target 3-5 pages). Be extremely concise, limit the length of explanations, and focus on high-level summaries. Keep section bodies short and dense."
+            if length_mode == "compact" else
+            "This is an EXTENDED draft (target 9-15 pages). Write detailed clauses, include sub-clauses, provide exhaustive descriptions, and write fully comprehensive sections."
+        )
+
+        # Assemble the user and system prompts
+        system_prompt = (
+            f"You are a principal enterprise procurement and contract document generation assistant.\n"
+            f"Your task is to generate a highly professional, realistic {doc_type.value}.\n"
+            f"Mandatory Sections to Generate (Do NOT add or remove headings unless matching the seed merger):\n"
+            f"{schema_block}\n\n"
+            f"{length_guideline}\n\n"
+            "Formatting Rules for section 'body' text:\n"
+            "- If section format is 'paragraph', write realistic paragraphs. Do not use tables or bullet lists.\n"
+            "- If section format is 'table', write ONLY a valid Markdown table with columns. Do not add intro text.\n"
+            "- If section format is 'numbered_clause', write text formatted as numbered clauses (e.g. 1.1, 1.2).\n"
+            "- If section format is 'hybrid', write an intro paragraph followed by a Markdown table.\n\n"
+            f"{hygiene_instructions}\n"
+            "Strive to use realistic Mock Facts instead of TBD/Placeholders unless inputs are missing. If inputs are missing, write '[ASSUMPTION: description]' or '[TBD: description]'."
+        )
+
+        user_content = []
+        if mode == "seed":
+            user_content.append(
+                "You are provided with a programmatically merged seed draft. Draft the final complete document based on this:\n"
+                "CRITICAL: You MUST preserve the exact HTML comment tags (e.g. <!-- SOURCE: SEED --> or <!-- SOURCE: TEMPLATE-DEFAULT -->) "
+                "at the very beginning of the body text for each section. Do not alter or omit these comments.\n\n"
+                f"{merged_draft_text}"
+            )
+        elif mode == "template":
+            user_content.append(
+                "Generate the document using the canonical schema sections, following the style of the template provided:\n"
+                f"Template Style reference: {sanitize_for_prompt(structure_hint.full_text[:4000])}"
+            )
+        else:
+            user_content.append(
+                "Generate the document using the canonical schema sections and the project parameters."
+            )
+
+        user_content.append(brief_block)
+        user_content.append(note_block)
+        user_content.append(deal_block)
+        if seeds:
+            user_content.append(
+                "\n\nReal reference examples for tone (do not copy facts):\n" +
+                "\n".join(f"- {s[:240]}" for s in seeds[:8])
+            )
+
+        user_prompt = "\n\n".join(user_content)
 
         key_facts_instruction = ""
         if emit_key_facts:
             key_facts_instruction = (
-                "\nAlso emit 'key_facts': 3-8 concrete, specific obligations from this document "
-                "(exact numbers, percentages, deadlines, monetary amounts) that a downstream "
-                "document analyzing or responding to this one would need to reference specifically."
+                "\nAlso emit 'key_facts': 3-8 concrete, specific obligations from this document (exact numbers, percentages, deadlines, monetary amounts)."
             )
+        system_prompt += key_facts_instruction
 
-        system = (
-            f"You are a senior procurement contract author generating a realistic synthetic "
-            f"{doc_type.value} document for training data.\n"
-            f"Write ONE complete, internally consistent {doc_type.value} with {min_sections}-{max_sections} "
-            f"sections covering the sections a real {doc_type.value} would contain end-to-end.\n"
-            f"Vary industry (pick one from {industries}) and language (pick one from {languages}).\n"
-            "Use authentic legal/contractual drafting conventions throughout — this must read as a whole "
-            "document, not a list of disconnected clauses.\n"
-            "Set 'industry' and 'language' to reflect what you chose."
-            f"{key_facts_instruction}"
-        )
+        # 4. Draft Document
         data = self._call(
-            system,
-            f"Generate one complete {doc_type.value} document."
-            + brief_block + note_block + structure_block + deal_block + seed_block,
-            _generate_document_tool(with_key_facts=emit_key_facts), "emit_document",
-            max_tokens=6000, temperature=0.85,
+            system=system_prompt,
+            user=user_prompt,
+            tool=_generate_document_tool(with_key_facts=emit_key_facts),
+            tool_name="emit_document",
+            max_tokens=8000,
+            temperature=0.7
         )
+
         title = str(data.get("title") or f"Synthetic {doc_type.value}").strip()
-        industry = str(data.get("industry") or industries[0])
-        language = str(data.get("language") or languages[0])
-        sections = [
-            {"heading": str(s.get("heading", "Section")), "body": str(s.get("body", "")).strip()}
-            for s in data.get("sections", [])
-            if str(s.get("body", "")).strip()
-        ]
+        industry = str(data.get("industry") or (industries[0] if industries else "General"))
+        language = str(data.get("language") or (languages[0] if languages else "en"))
+        
+        raw_sections = data.get("sections", [])
+        
+        # 5. Programmatic Provenance Healing: Extract source, clean comments, and store JSON-level metadata
+        import re
+        sections = []
+        for s in raw_sections:
+            heading = str(s.get("heading", "")).strip()
+            body = str(s.get("body", "")).strip()
+            if not heading:
+                continue
+            
+            # Find expected source tag
+            expected_tag = provenance_sources.get(heading)
+            if not expected_tag:
+                expected_tag = "<!-- SOURCE: TEMPLATE-DEFAULT -->" if mode != "seed" else "<!-- SOURCE: SEED-EXTENDED -->"
+            
+            # Determine source value from prompt tag or from actual body
+            source_value = "template-default"
+            if "SEED-EXTENDED" in expected_tag or "SEED-EXTENDED" in body:
+                source_value = "seed-extended"
+            elif "SEED" in expected_tag or "SEED" in body:
+                source_value = "seed"
+            elif "TEMPLATE-DEFAULT" not in expected_tag:
+                source_value = "llm-generated"
+            
+            # Clean body of any <!-- SOURCE: ... --> tags to keep text clean in UI/Markdown
+            clean_body = re.sub(r"<!--\s*SOURCE:\s*[^-]+\s*-->", "", body).strip()
+            
+            sections.append({
+                "heading": heading,
+                "body": clean_body,
+                "source": source_value
+            })
+
         key_facts = [
             {"id": str(f.get("id") or f"F{i+1}"), "text": str(f.get("text", "")).strip()}
             for i, f in enumerate(data.get("key_facts", []))
@@ -971,6 +1364,7 @@ class SyntheticDataGenerationService:
                 "industry": industry, "language": language,
                 "brief": bool(brief and brief.strip()), "seeds_used": len(seeds or []),
                 "synthetic": True,
+                "mode": mode,
                 **({"deal_source": deal_context.source_label} if deal_context is not None else {}),
             },
         )

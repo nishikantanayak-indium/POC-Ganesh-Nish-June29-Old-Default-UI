@@ -31,7 +31,10 @@ _KEYWORDS = re.compile(
     r"deliver|payment|invoice|breach|obligation|service level|uptime|damages)\b",
     re.IGNORECASE,
 )
-_PLACEHOLDER = re.compile(r"(lorem ipsum|todo|xxx|\[insert|placeholder|tbd)", re.IGNORECASE)
+_PLACEHOLDER = re.compile(
+    r"(lorem ipsum|\btodo\b|\bxxx\b|\[insert|placeholder|\btbd\b(?!\s*:\s*[^\]]*\]))",
+    re.IGNORECASE
+)
 
 _JUDGE_TOOL = {
     "type": "function",

@@ -108,7 +108,7 @@ export function ChatWindow({ workspaceId }: ChatWindowProps) {
                       )}
                     >
                       {m.role === 'assistant' ? (
-                        <div className="[&_p]:my-1.5 [&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-4 [&_table]:my-2 [&_table]:w-full [&_table]:border-collapse [&_table]:text-xs [&_th]:border [&_th]:border-border [&_th]:bg-surface-subtle [&_th]:px-1.5 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold dark:[&_th]:border-border-dark dark:[&_th]:bg-surface-dark-muted [&_td]:border [&_td]:border-border [&_td]:px-1.5 [&_td]:py-1 dark:[&_td]:border-border-dark">
+                        <div className="[&_p]:my-1.5 [&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-8 [&_table]:my-2 [&_table]:w-full [&_table]:border-collapse [&_table]:text-xs [&_th]:border [&_th]:border-border [&_th]:bg-surface-subtle [&_th]:px-1.5 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold dark:[&_th]:border-border-dark dark:[&_th]:bg-surface-dark-muted [&_td]:border [&_td]:border-border [&_td]:px-1.5 [&_td]:py-1 dark:[&_td]:border-border-dark">
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
                         </div>
                       ) : (

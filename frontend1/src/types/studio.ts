@@ -105,6 +105,9 @@ export interface DocGenKnobs {
   note?: string
   mode?: 'independent' | 'linked'
   deal_count?: number
+  length_mode?: 'compact' | 'extended'
+  geography?: string
+  compliances?: string[]
 }
 
 // Mirrors the actual stage strings emitted by backend/api/routes/synthetic.py's
@@ -245,6 +248,7 @@ export interface SyntheticDocSection {
   heading: string
   record_ids: string[]
   body: string
+  source?: string
 }
 
 export interface SyntheticDocumentT {
